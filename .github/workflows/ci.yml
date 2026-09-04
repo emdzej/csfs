@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A second push supersedes the first: nothing here is worth finishing for a
+# commit that has already been replaced.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Build, typecheck, test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # No `version:` — `packageManager` in package.json is the one source of
+      # the pnpm version, and setting both makes the action error on the clash.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Typecheck
+        # `svelte-check` is separate from `tsc`: it is the only thing that reads
+        # the demo's templates.
+        run: pnpm typecheck
+
+      - name: Test
+        # Includes the parity suite, which stands up a real HTTP server over a
+        # real directory and compares reads byte for byte against the Node
+        # backend. That is the test that earns the abstraction; each backend's
+        # own suite only proves it is self-consistent.
+        run: pnpm test
+
+      - name: Formatting
+        run: pnpm prettier --check .

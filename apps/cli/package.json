@@ -1,12 +1,34 @@
 {
   "name": "@emdzej/csfs-cli",
   "version": "0.1.0",
-  "private": true,
   "description": "Build csfs manifests, and inspect a tree through any backend",
   "license": "PolyForm-Noncommercial-1.0.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/emdzej/csfs.git",
+    "directory": "apps/cli"
+  },
+  "homepage": "https://github.com/emdzej/csfs#the-manifest",
+  "bugs": {
+    "url": "https://github.com/emdzej/csfs/issues"
+  },
+  "keywords": [
+    "csfs",
+    "manifest",
+    "cli",
+    "zip",
+    "filesystem"
+  ],
   "type": "module",
   "bin": {
     "csfs": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   },
   "scripts": {
     "build": "tsc -b",

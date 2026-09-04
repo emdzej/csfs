@@ -86,10 +86,15 @@ csfs manifest ./data --label "my tree" --archive "/drawings.zip:/drawings:basena
 ```
 
 That writes `csfs-manifest.json`: a flat map from path to size, plus any
-archives. Flat because paths in a real tree share long prefixes and gzip
-extremely well, because a lookup is then one map hit rather than a fetch per
-directory level, and because directories can be _derived_ — which is what lets
-an archive stand in for a directory that is not on disk.
+archives. Flat because a lookup is then one map hit rather than a fetch per
+directory level, because paths in a real tree share long prefixes and compress
+well, and because directories can be _derived_ — which is what lets an archive
+stand in for a directory that is not on disk.
+
+Measured on a real tree: **228,515 entries describing 15.31 GB come to 14.72 MB
+of JSON, 1.68 MB gzipped.** That is the cost, and it is paid once when the tree
+is opened — worth it at that scale, and irrelevant for a tree of a dozen files,
+but a tree in the millions would want something smarter than JSON.
 
 The other backends need no manifest; they can list for themselves.
 

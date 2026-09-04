@@ -53,6 +53,44 @@ export async function pickDirectory(
   return await picker({ mode });
 }
 
+/**
+ * Prompt for a single file.
+ *
+ * The companion to `pickDirectory`, and the way to open an archive: the
+ * returned `File` is a `Blob`, so `zipFromBlob` mounts it directly.
+ *
+ * Chromium-only, like the rest of this API. `<input type="file">` and a drop
+ * event both yield a `File` too and work everywhere, so a consumer that wants
+ * broad support should offer one of those and pass the result to
+ * `zipFromBlob` — there is nothing in this package it needs.
+ */
+export async function pickFile(
+  opts: { accept?: Record<string, string[]> } = {},
+): Promise<File> {
+  const picker = (
+    globalThis as {
+      showOpenFilePicker?: (o?: {
+        multiple?: boolean;
+        types?: { description?: string; accept: Record<string, string[]> }[];
+      }) => Promise<FileSystemFileHandle[]>;
+    }
+  ).showOpenFilePicker;
+  if (typeof picker !== "function") {
+    throw new Error("this browser has no File System Access API");
+  }
+  const [handle] = await picker({
+    multiple: false,
+    ...(opts.accept ? { types: [{ accept: opts.accept }] } : {}),
+  });
+  if (!handle) throw new Error("no file chosen");
+  return await handle.getFile();
+}
+
+/** Prompt for a zip archive specifically. */
+export async function pickArchive(): Promise<File> {
+  return await pickFile({ accept: { "application/zip": [".zip"] } });
+}
+
 type PermissionMode = "read" | "readwrite";
 
 interface PermissionCapable {

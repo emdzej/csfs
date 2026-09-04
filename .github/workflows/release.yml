@@ -1,0 +1,198 @@
+# Publish to npm with trusted publishing.
+#
+# No NPM_TOKEN. npm exchanges GitHub's OIDC token for a short-lived credential,
+# which is why `id-token: write` below is the whole of the authentication.
+#
+# THE FILENAME OF THIS WORKFLOW IS PART OF THE CREDENTIAL. npm binds a trusted
+# publisher to `owner/repo` *and* a workflow file name, so renaming this file
+# revokes publishing until the trust is reconfigured. Before the first release,
+# each package needs (npm CLI 11.5.1+, and it will prompt for a login):
+#
+#   for p in core zip http fsa opfs node manifest cli; do
+#     npm trust github "@emdzej/csfs-$p" --repo emdzej/csfs --file release.yml --allow-publish -y
+#   done
+#
+# That can be done before a package exists, which is what makes a first
+# release possible without a token.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: "Pack and check everything, publish nothing"
+        type: boolean
+        default: true
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # the credential itself — OIDC, in place of a token
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Trusted publishing needs Node >= 22.14 and npm >= 11.5.1.
+          node-version: 24
+          registry-url: "https://registry.npmjs.org"
+          # Deliberately uncached: a release should be built from the registry's
+          # current contents, not from whatever a previous run left behind.
+
+      - name: Check the toolchain can do trusted publishing
+        # Node 24 ships npm 11.x, but that is a property of the runner image
+        # rather than a guarantee. A version too old does not fail the publish
+        # cleanly — it falls back to looking for a token that is not there and
+        # reports an authentication error, which sends you looking in the wrong
+        # place entirely.
+        run: |
+          set -euo pipefail
+          npm install -g npm@latest
+          echo "node $(node --version), npm $(npm --version)"
+          node -e '
+            const [maj, min, pat] = process.versions.node.split(".").map(Number);
+            if (maj < 22 || (maj === 22 && (min < 14))) {
+              console.error(`node ${process.versions.node} is below the 22.14 trusted publishing needs`);
+              process.exit(1);
+            }
+          '
+          npm --version | node -e '
+            let s = ""; process.stdin.on("data", d => s += d).on("end", () => {
+              const [maj, min, pat] = s.trim().split(".").map(Number);
+              const ok = maj > 11 || (maj === 11 && (min > 5 || (min === 5 && pat >= 1)));
+              if (!ok) { console.error(`npm ${s.trim()} is below 11.5.1`); process.exit(1); }
+            });
+          '
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Agree the tag with the versions in the tree
+        # Eight packages share one version. A tag that disagrees with them
+        # publishes something other than what the tag says, and npm versions are
+        # immutable — so this is checked before anything is built, not after.
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "push" ]; then
+            TAG="${GITHUB_REF#refs/tags/v}"
+          else
+            TAG="$(node -p 'require("./package.json").version')"
+            echo "manual run — taking the version from the root package.json"
+          fi
+          echo "expecting $TAG"
+
+          fail=0
+          for f in package.json packages/*/package.json apps/cli/package.json; do
+            v="$(node -p "require('./$f').version")"
+            if [ "$v" != "$TAG" ]; then
+              echo "::error file=$f::version $v does not match $TAG"
+              fail=1
+            fi
+          done
+          [ "$fail" = 0 ] || exit 1
+          echo "VERSION=$TAG" >> "$GITHUB_ENV"
+          echo "all versions agree on $TAG"
+
+      - name: Build
+        run: pnpm build
+
+      - name: Test
+        # The gate. A release that skips this is a release that ships whatever
+        # the last commit happened to do.
+        run: pnpm test
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Pack
+        # `pnpm pack`, not `npm pack`: the packages depend on each other through
+        # `workspace:*`, which npm leaves verbatim. Publishing that produces a
+        # package whose dependency cannot be resolved by anyone — it installs
+        # fine here and fails for every consumer. pnpm rewrites it to the real
+        # version while packing, so the tarball is what gets published.
+        run: |
+          set -euo pipefail
+          mkdir -p dist-npm
+          for p in core manifest zip http fsa opfs node; do
+            pnpm --filter "@emdzej/csfs-$p" pack --pack-destination dist-npm
+          done
+          pnpm --filter "@emdzej/csfs-cli" pack --pack-destination dist-npm
+          ls -la dist-npm
+
+      - name: Check no tarball still carries a workspace dependency
+        # The failure this guards against is silent at publish time and total at
+        # install time, so it is worth asserting rather than trusting.
+        run: |
+          set -euo pipefail
+          fail=0
+          for t in dist-npm/*.tgz; do
+            deps="$(tar -xzOf "$t" package/package.json | node -p 'JSON.parse(require("fs").readFileSync(0,"utf8")).dependencies ?? {}' 2>/dev/null || echo '{}')"
+            if echo "$deps" | grep -q "workspace:"; then
+              echo "::error::$t still contains a workspace: dependency — $deps"
+              fail=1
+            fi
+          done
+          [ "$fail" = 0 ] || exit 1
+          echo "no workspace: ranges survived packing"
+
+      - name: Publish
+        if: github.event_name == 'push' || inputs.dry-run == false
+        # Order matters only for a human reading the log; npm does not resolve
+        # dependencies at publish time. Dependencies first anyway, so a partial
+        # failure leaves a coherent set rather than a package pointing at one
+        # that does not exist yet.
+        #
+        # Already-published versions are skipped rather than fatal: a run that
+        # fails at package six should be re-runnable without hand-editing.
+        run: |
+          set -euo pipefail
+          published=() skipped=() failed=()
+          for p in core manifest zip http fsa opfs node cli; do
+            name="@emdzej/csfs-$p"
+            tarball="dist-npm/emdzej-csfs-$p-$VERSION.tgz"
+            if [ ! -f "$tarball" ]; then
+              echo "::error::$tarball is missing"
+              failed+=("$name")
+              continue
+            fi
+            if npm view "$name@$VERSION" version --loglevel silent >/dev/null 2>&1; then
+              echo "skip $name@$VERSION — already on the registry"
+              skipped+=("$name")
+              continue
+            fi
+            echo "publishing $name@$VERSION"
+            if npm publish "$tarball" --provenance --access public; then
+              published+=("$name")
+            else
+              echo "::error::$name failed to publish"
+              failed+=("$name")
+            fi
+          done
+
+          {
+            echo "### npm — \`$VERSION\`"
+            echo
+            [ ${#published[@]} -gt 0 ] && printf 'published: %s\n\n' "${published[*]}"
+            [ ${#skipped[@]} -gt 0 ] && printf 'already there: %s\n\n' "${skipped[*]}"
+            [ ${#failed[@]} -gt 0 ] && printf '**failed: %s**\n' "${failed[*]}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          [ ${#failed[@]} -eq 0 ]
+
+      - name: Say what a dry run would have done
+        if: github.event_name == 'workflow_dispatch' && inputs.dry-run
+        run: |
+          set -euo pipefail
+          for t in dist-npm/*.tgz; do
+            npm publish "$t" --provenance --access public --dry-run
+          done
+          echo "Nothing was published." >> "$GITHUB_STEP_SUMMARY"

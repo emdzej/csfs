@@ -1,0 +1,30 @@
+{
+  "name": "@emdzej/csfs-demo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Browse a tree through every csfs backend, and build a manifest without a CLI",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "svelte-check --tsconfig ./tsconfig.json"
+  },
+  "dependencies": {
+    "@emdzej/csfs-core": "workspace:*",
+    "@emdzej/csfs-fsa": "workspace:*",
+    "@emdzej/csfs-http": "workspace:*",
+    "@emdzej/csfs-manifest": "workspace:*",
+    "@emdzej/csfs-opfs": "workspace:*",
+    "@emdzej/csfs-zip": "workspace:*"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^5.0.0",
+    "@tsconfig/svelte": "^5.0.4",
+    "svelte": "^5.0.0",
+    "svelte-check": "^4.0.0",
+    "typescript": "^5.7.3",
+    "vite": "^6.0.0"
+  }
+}

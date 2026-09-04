@@ -158,3 +158,46 @@ export function bytesFile(path: string, data: Uint8Array, mime = ""): CsFile {
     mime,
   );
 }
+
+/**
+ * A `CsFile` over a `Blob` or a `File`.
+ *
+ * The one-liner for the common case: a file the user picked, dropped, or chose
+ * with `<input type="file">`. The path defaults to the file's own name so a
+ * caller passing a `File` needs nothing else.
+ */
+export function blobFile(
+  blob: BlobLike & { name?: string },
+  path?: string,
+  mime?: string,
+): CsFile {
+  const resolved = path ?? `/${blob.name ?? "file"}`;
+  return new BlobFile(resolved, blob, mime);
+}
+
+/**
+ * A `Blob` from bytes, with the type set.
+ *
+ * Here rather than in each caller because every consumer meets the same
+ * friction: TypeScript will not accept a `Uint8Array<ArrayBufferLike>` as a
+ * `BlobPart`, since the buffer *might* be a `SharedArrayBuffer`. It never is,
+ * for bytes that came out of a file, so the cast belongs at one boundary
+ * instead of being rediscovered at every call site.
+ *
+ * Setting the type matters: an `<img>` will sniff a typeless blob and cope,
+ * but an `<iframe>` handed a typeless PDF offers a download rather than
+ * rendering it.
+ */
+export function toBlob(bytes: Uint8Array, type = "application/octet-stream"): Blob {
+  return new Blob([bytes as unknown as ArrayBufferView<ArrayBuffer>], { type });
+}
+
+/**
+ * An object URL for a file's contents.
+ *
+ * **The caller must revoke it.** A page that mints one per image and never
+ * revokes pins every image it has ever shown in memory.
+ */
+export async function objectUrl(file: CsFile): Promise<string> {
+  return URL.createObjectURL(toBlob(await file.bytes(), file.type));
+}

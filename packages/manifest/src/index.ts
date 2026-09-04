@@ -9,8 +9,10 @@
  * The format is a flat map from path to size, not a nested tree. Three reasons,
  * all learned by trying the alternatives:
  *
- * - **It gzips extremely well.** Paths in a real tree share long prefixes;
- *   228,000 entries compress to a few hundred kilobytes.
+ * - **It compresses well.** Paths in a real tree share long prefixes. Measured:
+ *   228,515 entries come to 14.72 MB of JSON and 1.68 MB gzipped — not the
+ *   "few hundred kilobytes" first guessed here, but an 8.8:1 ratio and a
+ *   one-off cost when the tree is opened.
  * - **A lookup is one map hit**, with no walk and no per-directory fetch. A
  *   per-directory index — one `index.json` in every folder — costs a round trip
  *   per level, which is four or five before you reach a file.

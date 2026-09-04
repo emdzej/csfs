@@ -1,0 +1,90 @@
+name: Deploy the demo
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Not cancel-in-progress: a half-finished deploy leaves the site in whatever
+# state the cancelled run reached. Queueing is right for a publish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+
+      - name: Work out the base path
+        id: base
+        # A custom domain serves at the root; `<user>.github.io/<repo>/` serves
+        # under a prefix. `base` is baked in at build time and a build cannot be
+        # relocated afterwards, so this has to be decided here and be right.
+        # `public/CNAME` is the signal because it is the same file GitHub reads
+        # to keep the domain attached — one fact, one place. A fork without one
+        # still gets a working prefixed build.
+        run: |
+          set -euo pipefail
+          if [ -f apps/demo/public/CNAME ]; then
+            echo "path=/" >> "$GITHUB_OUTPUT"
+            echo "custom domain $(cat apps/demo/public/CNAME) — building for the root"
+          else
+            echo "path=/${{ github.event.repository.name }}/" >> "$GITHUB_OUTPUT"
+            echo "no CNAME — building for /${{ github.event.repository.name }}/"
+          fi
+
+      - name: Build the demo
+        env:
+          BASE_PATH: ${{ steps.base.outputs.path }}
+        run: pnpm --filter @emdzej/csfs-demo build
+
+      - name: Check the build is self-contained and correctly based
+        run: |
+          set -euo pipefail
+          BASE='${{ steps.base.outputs.path }}'
+          test -f apps/demo/dist/index.html
+
+          # This failure is nasty because index.html still returns 200: the page
+          # loads and every asset 404s. Shipping a /csfs/ build to a root domain
+          # does exactly that.
+          if ! grep -q "src=\"${BASE}assets/" apps/demo/dist/index.html; then
+            echo "index.html does not reference assets under ${BASE}:" >&2
+            grep -oE '(src|href)="[^"]*assets[^"]*"' apps/demo/dist/index.html >&2
+            exit 1
+          fi
+          echo "assets are referenced under ${BASE}"
+
+          if [ -f apps/demo/public/CNAME ]; then
+            test -f apps/demo/dist/CNAME
+            echo "CNAME deployed: $(cat apps/demo/dist/CNAME)"
+          fi
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: apps/demo/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -16,6 +16,7 @@ import { ZipReader, type Entry, type FileEntry } from "@zip.js/zip.js";
 import {
   BackendError,
   basename,
+  blobFile,
   bytesFile,
   dirname,
   mimeType,
@@ -27,6 +28,7 @@ import {
   type CsFile,
   type CsFileSystem,
   type CsStat,
+  type BlobLike,
 } from "@emdzej/csfs-core";
 import { CsFileReader } from "./reader.js";
 
@@ -243,3 +245,25 @@ export function zipFileSystem(archive: CsFile, opts?: ZipFileSystemOptions): Zip
 
 /** Re-exported so callers can build a path without importing core directly. */
 export { dirname };
+
+/**
+ * Mount a `Blob` or a `File` as a file system.
+ *
+ * This is the whole answer to "can I open a zip the user picked?" — a `File`
+ * *is* a `Blob`, so it already satisfies the read contract and needs no
+ * adapter. It works from `showOpenFilePicker()`, from `<input type="file">`
+ * and from a drop event, and the latter two work in every browser rather than
+ * only in Chromium.
+ *
+ * One caveat worth passing on: a `File` is a snapshot of a path, not a lock on
+ * it. If the archive changes on disk after being picked, later reads throw
+ * rather than returning stale bytes — which is the right behaviour, but a
+ * long-lived page should be ready to ask for it again.
+ */
+export function zipFromBlob(
+  blob: BlobLike & { name?: string },
+  opts: ZipFileSystemOptions & { path?: string } = {},
+): ZipFileSystem {
+  const { path, ...rest } = opts;
+  return new ZipFileSystem(blobFile(blob, path, "application/zip"), rest);
+}

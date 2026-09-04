@@ -3,6 +3,24 @@
   "version": "0.1.0",
   "description": "Client-side file system: the read contract, paths, and shared file implementations",
   "license": "PolyForm-Noncommercial-1.0.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/emdzej/csfs.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/emdzej/csfs/tree/main/packages/core#readme",
+  "bugs": {
+    "url": "https://github.com/emdzej/csfs/issues"
+  },
+  "keywords": [
+    "filesystem",
+    "browser",
+    "zip",
+    "range-requests",
+    "opfs",
+    "file-system-access",
+    "http"
+  ],
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -15,6 +33,10 @@
   "files": [
     "dist"
   ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc --noEmit",

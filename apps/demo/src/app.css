@@ -1,0 +1,243 @@
+/* Light, plain, and readable. The page is a demonstration, not a product. */
+:root {
+  --ink: #10151c;
+  --ink-soft: #48525e;
+  --ink-faint: #8a939d;
+  --paper: #f4f5f8;
+  --card: #fff;
+  --rule: #c7cdd6;
+  --rule-soft: #e3e6ec;
+  --accent: #1d4ed8;
+  --red: #c02222;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font:
+    15px/1.5 -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    system-ui,
+    sans-serif;
+}
+
+main {
+  max-width: 62rem;
+  margin: 0 auto;
+  padding: 1.5rem 1rem 3rem;
+}
+
+header h1 {
+  margin: 0;
+  font-size: 1.6rem;
+  letter-spacing: -0.02em;
+}
+header p {
+  margin: 0.35rem 0 1.25rem;
+  color: var(--ink-soft);
+  max-width: 46rem;
+}
+
+section {
+  margin-bottom: 1.25rem;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.5rem;
+}
+
+input[type="text"],
+input:not([type]) {
+  flex: 1;
+  min-width: 18rem;
+}
+input {
+  font: inherit;
+  font-size: 0.86rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: var(--card);
+  color: var(--ink);
+}
+input:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+button {
+  font: inherit;
+  font-size: 0.86rem;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: var(--card);
+  color: var(--ink);
+  cursor: pointer;
+}
+button:hover:not(:disabled) {
+  background: var(--paper);
+}
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+button.primary:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+/* A file input styled as a button, since the native control cannot be. */
+.filebtn {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.86rem;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: var(--card);
+  cursor: pointer;
+}
+.filebtn:hover {
+  background: var(--paper);
+}
+.filebtn input {
+  display: none;
+}
+
+.note {
+  margin: 0.3rem 0;
+  font-size: 0.8rem;
+  color: var(--ink-faint);
+}
+.error {
+  margin: 0.5rem 0;
+  padding: 0.5rem 0.6rem;
+  font-size: 0.86rem;
+  color: var(--red);
+  background: color-mix(in srgb, var(--red) 6%, transparent);
+  border-left: 3px solid var(--red);
+}
+.busy {
+  margin: 0.5rem 0;
+  font-size: 0.86rem;
+  color: var(--ink-soft);
+}
+
+.tree,
+.preview {
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: var(--card);
+}
+
+.crumbs {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  padding: 0.45rem 0.6rem;
+  border-bottom: 1px solid var(--rule-soft);
+  background: var(--paper);
+  font-size: 0.86rem;
+}
+.crumbs .spacer {
+  flex: 1;
+}
+.backend {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+}
+
+ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 28rem;
+  overflow-y: auto;
+}
+li + li {
+  border-top: 1px solid var(--rule-soft);
+}
+li button {
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+  gap: 1rem;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  text-align: left;
+}
+li.empty {
+  padding: 0.5rem 0.7rem;
+  color: var(--ink-faint);
+  font-size: 0.86rem;
+}
+.name.dir {
+  font-weight: 600;
+}
+.size {
+  font-family: var(--mono);
+  font-size: 0.76rem;
+  color: var(--ink-faint);
+}
+
+code {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+}
+
+pre {
+  margin: 0;
+  padding: 0.6rem;
+  max-height: 26rem;
+  overflow: auto;
+  font-family: var(--mono);
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+img {
+  display: block;
+  max-width: 100%;
+  padding: 0.6rem;
+}
+iframe {
+  display: block;
+  width: 100%;
+  height: 70vh;
+  border: 0;
+}
+
+footer {
+  display: flex;
+  gap: 1rem;
+  margin-top: 2rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--rule);
+  font-size: 0.8rem;
+  color: var(--ink-faint);
+}
+footer a {
+  color: var(--accent);
+}
