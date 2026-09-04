@@ -1,0 +1,29 @@
+{
+  "name": "@emdzej/csfs-node",
+  "version": "0.1.0",
+  "description": "File system over node:fs, for tooling and tests",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@emdzej/csfs-core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.1"
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "name": "@emdzej/csfs-zip",
+  "version": "0.1.0",
+  "description": "Mount a zip archive as a file system, read by range",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@emdzej/csfs-core": "workspace:*",
+    "@zip.js/zip.js": "^2.10.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.1",
+    "@emdzej/csfs-node": "workspace:*"
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "name": "@emdzej/csfs-manifest",
+  "version": "0.1.0",
+  "description": "The HTTP manifest format, and building one from any file system",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@emdzej/csfs-core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.1"
+  }
+}

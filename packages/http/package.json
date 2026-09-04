@@ -1,0 +1,33 @@
+{
+  "name": "@emdzej/csfs-http",
+  "version": "0.1.0",
+  "description": "File system over static HTTP, manifest-driven, with Range reads",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@emdzej/csfs-core": "workspace:*",
+    "@emdzej/csfs-manifest": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.1",
+    "@emdzej/csfs-node": "workspace:*",
+    "@emdzej/csfs-zip": "workspace:*",
+    "@zip.js/zip.js": "^2.10.0"
+  }
+}

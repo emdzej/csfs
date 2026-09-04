@@ -1,0 +1,29 @@
+{
+  "name": "@emdzej/csfs-cli",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Build csfs manifests, and inspect a tree through any backend",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "type": "module",
+  "bin": {
+    "csfs": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@commander-js/extra-typings": "^15.0.0",
+    "@emdzej/csfs-core": "workspace:*",
+    "@emdzej/csfs-http": "workspace:*",
+    "@emdzej/csfs-manifest": "workspace:*",
+    "@emdzej/csfs-node": "workspace:*",
+    "@emdzej/csfs-zip": "workspace:*",
+    "chalk": "^6.0.0",
+    "commander": "^15.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.1"
+  }
+}

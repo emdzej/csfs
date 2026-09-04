@@ -1,0 +1,13 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/core" },
+    { "path": "./packages/zip" },
+    { "path": "./packages/http" },
+    { "path": "./packages/fsa" },
+    { "path": "./packages/opfs" },
+    { "path": "./packages/node" },
+    { "path": "./packages/manifest" },
+    { "path": "./apps/cli" }
+  ]
+}

@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.turbo/
+*.tsbuildinfo
+.DS_Store
+# Trees built for testing: not ours to commit, and large.
+data/

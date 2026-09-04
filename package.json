@@ -1,0 +1,31 @@
+{
+  "name": "csfs",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Client-side file system — one read API over HTTP, a picked directory, OPFS, and inside zip archives",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/emdzej/csfs"
+  },
+  "type": "module",
+  "packageManager": "pnpm@10.33.1",
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "pnpm --filter @emdzej/csfs-demo dev",
+    "cli": "node apps/cli/dist/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "turbo run typecheck && pnpm --filter @emdzej/csfs-demo typecheck",
+    "check": "turbo run build typecheck && pnpm test && prettier --check .",
+    "format": "prettier --write .",
+    "clean": "turbo run clean"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.1",
+    "prettier": "^3.5.1",
+    "turbo": "^2.4.2",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.9"
+  }
+}
