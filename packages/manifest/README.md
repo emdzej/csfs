@@ -54,8 +54,13 @@ not invent a timestamp, and a deterministic build wants to leave it out.
 
 ## What it costs
 
-Measured on a real tree: **228,515 entries describing 15.31 GB come to 14.72 MB
-of JSON, 1.68 MB gzipped.** Paid once, when the tree is opened.
+Measured on a real tree: **43,915 entries describing 15.30 GB come to 4.02 MB
+of JSON, 0.42 MB gzipped** — 9.4:1, at a host's default level. Paid once, when the tree is opened.
+
+Extracting that tree's nine archives serves the same bytes from 228,515 paths,
+and the manifest becomes 14.72 MB — 1.68 MB gzipped. A manifest is priced in
+paths, not bytes, which is the argument for declaring an archive rather than
+unpacking it.
 
 Worth it at that scale and irrelevant for a dozen files — but a tree in the
 millions would want something other than JSON, and this format does not pretend

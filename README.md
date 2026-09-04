@@ -91,10 +91,15 @@ directory level, because paths in a real tree share long prefixes and compress
 well, and because directories can be _derived_ — which is what lets an archive
 stand in for a directory that is not on disk.
 
-Measured on a real tree: **228,515 entries describing 15.31 GB come to 14.72 MB
-of JSON, 1.68 MB gzipped.** That is the cost, and it is paid once when the tree
+Measured on a real tree: **43,915 entries describing 15.30 GB come to 4.02 MB
+of JSON, 0.42 MB gzipped** — 9.4:1, at a host's default level. That is the cost, and it is paid once when the tree
 is opened — worth it at that scale, and irrelevant for a tree of a dozen files,
 but a tree in the millions would want something smarter than JSON.
+
+That tree keeps nine archives packed. Extracted, the _same bytes_ need 228,515
+entries and the manifest grows to 14.72 MB — 1.68 MB gzipped. Declaring an
+archive is what makes the difference, because paths are what a manifest costs,
+not bytes.
 
 The other backends need no manifest; they can list for themselves.
 
