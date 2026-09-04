@@ -95,9 +95,38 @@ beforeAll(async () => {
     ]),
   );
 
+  // Three archives serving one directory, which is how a multi-disc data set
+  // ships: each disc has its own `images_1.zip`, none of them renamed.
+  await writeFile(
+    join(dir, "images_1.zip"),
+    await makeZip([{ name: "one.png", bytes: pattern(1024) }]),
+  );
+  await writeFile(
+    join(dir, "images_2.zip"),
+    await makeZip([{ name: "two.png", bytes: pattern(2048) }]),
+  );
+  // `shared.png` is in an archive *and* extracted below, so precedence has
+  // something to decide.
+  await writeFile(
+    join(dir, "images_3.zip"),
+    await makeZip([
+      { name: "three.png", bytes: pattern(3072) },
+      { name: "shared.png", text: "the archived one" },
+    ]),
+  );
+  await mkdir(join(dir, "images", "bucket"), { recursive: true });
+  await writeFile(join(dir, "images", "bucket", "shared.png"), "the extracted one");
+
+  const declared = [
+    { archive: "/drawings.zip", serves: "/drawings", entry: "basename" as const },
+    { archive: "/images_1.zip", serves: "/images", entry: "basename" as const },
+    { archive: "/images_2.zip", serves: "/images", entry: "basename" as const },
+    { archive: "/images_3.zip", serves: "/images", entry: "basename" as const },
+  ];
+
   const manifest = await buildManifest(nodeFileSystem(dir), {
     builtAt: new Date(0).toISOString(),
-    archives: [{ archive: "/drawings.zip", serves: "/drawings", entry: "basename" }],
+    archives: declared,
     filter: (p) => !p.endsWith(`/${MANIFEST_FILE}`),
   });
   await writeFile(join(dir, MANIFEST_FILE), formatManifest(manifest));
@@ -192,5 +221,81 @@ describe("HTTP and Node agree", () => {
     expect(await remote.directory("/drawings")).not.toBeNull();
     const root = await remote.directory("/");
     expect((await root!.entries()).map((e) => e.name)).toContain("drawings");
+  });
+
+  /*
+   * The configuration a consumer actually assembles.
+   *
+   * The tests above hand `withTransparentArchives` a mount list written out
+   * by hand, which checks the mount logic but not the part a consumer depends
+   * on: that the mounts *come back out of the manifest* in the shape the
+   * wrapper wants. `buildManifest({ archives })` writes them and `archives()`
+   * reads them, and nothing until now has closed that loop — a disagreement
+   * between the two would leave every mounted read returning null, with no
+   * error to point at it.
+   */
+  describe("mounts round-tripped through the manifest", () => {
+    /** Byte for byte what a consumer writes to open such a tree. */
+    async function openAsAConsumerWould() {
+      const remote = httpFileSystem(base);
+      const archives = await remote.archives();
+      return { fs: withTransparentArchives(withArchives(remote), archives), archives };
+    }
+
+    it("declares every archive it was built with", async () => {
+      const { archives } = await openAsAConsumerWould();
+      expect(archives.map((a) => a.archive).sort()).toEqual([
+        "/drawings.zip",
+        "/images_1.zip",
+        "/images_2.zip",
+        "/images_3.zip",
+      ]);
+      // `entry` has to survive the round trip. If it came back undefined it
+      // would default to "relative", and every basename lookup would miss.
+      expect(archives.every((a) => a.entry === "basename")).toBe(true);
+    });
+
+    it("reads from each of three archives serving one directory", async () => {
+      const { fs } = await openAsAConsumerWould();
+      const local = withTransparentArchives(nodeFileSystem(dir), [
+        { archive: "/images_1.zip", serves: "/images", entry: "basename" },
+        { archive: "/images_2.zip", serves: "/images", entry: "basename" },
+        { archive: "/images_3.zip", serves: "/images", entry: "basename" },
+      ]);
+      // Nested paths that exist in no archive's own layout: each is found by
+      // basename, in whichever archive happens to hold it.
+      for (const [path, size] of [
+        ["/images/bucket/one.png", 1024],
+        ["/images/deeper/still/two.png", 2048],
+        ["/images/three.png", 3072],
+      ] as const) {
+        const bytes = await fs.read(path);
+        expect(bytes, path).not.toBeNull();
+        expect(bytes!.byteLength, path).toBe(size);
+        expect(bytes, path).toEqual(await local.read(path));
+      }
+    });
+
+    it("returns null for a name in none of them, rather than the wrong file", async () => {
+      const { fs } = await openAsAConsumerWould();
+      expect(await fs.read("/images/bucket/absent.png")).toBeNull();
+    });
+
+    it("prefers the extracted file over the archived one of the same name", async () => {
+      const { fs } = await openAsAConsumerWould();
+      // A half-extracted tree is the normal state during an import, so the
+      // real file has to win — otherwise a re-import silently keeps serving
+      // stale bytes out of the archive.
+      const bytes = await fs.read("/images/bucket/shared.png");
+      expect(new TextDecoder().decode(bytes!)).toBe("the extracted one");
+    });
+
+    it("still reads a nested archive by # once mounts are in play", async () => {
+      const { fs } = await openAsAConsumerWould();
+      // `withArchives` under `withTransparentArchives`: both wrappers active
+      // at once, which is the stack a consumer ends up with.
+      const bytes = await fs.read("/images_3.zip#/three.png");
+      expect(bytes?.byteLength).toBe(3072);
+    });
   });
 });
