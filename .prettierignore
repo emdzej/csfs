@@ -1,0 +1,11 @@
+# Generated, and rewritten by pnpm on every install — formatting it produces
+# churn that comes straight back.
+pnpm-lock.yaml
+
+# Build output.
+dist/
+.turbo/
+*.tsbuildinfo
+
+# Trees built for testing.
+data/
