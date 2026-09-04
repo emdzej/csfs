@@ -110,7 +110,10 @@ code. Keep it that way.
 
 ## Repository facts
 
-- **PolyForm Noncommercial 1.0.0.** It cannot import or copy GPL code.
+- **MIT.** Permissive, because this is a library meant to be depended on.
+  It still cannot take GPL code: MIT carries no copyleft obligation, so
+  importing GPL source would relicense what is downstream of it. Mirror a
+  convention if it is the obvious one; never lift the source.
 - **No data in the repository.** Tests build their own fixtures — including
   their archives, with `zip.js`, so a fixture is a real archive rather than a
   hand-rolled byte array that might not resemble one.

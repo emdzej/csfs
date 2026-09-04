@@ -79,5 +79,4 @@ path assembled from untrusted input stays inside the tree.
 
 ## Licence
 
-**PolyForm Noncommercial 1.0.0** — see the
-[repository](https://github.com/emdzej/csfs).
+**MIT** — see [LICENSE](https://github.com/emdzej/csfs/blob/main/LICENSE).

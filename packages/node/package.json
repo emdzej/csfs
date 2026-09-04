@@ -2,7 +2,7 @@
   "name": "@emdzej/csfs-node",
   "version": "0.1.0",
   "description": "File system over node:fs, for tooling and tests",
-  "license": "PolyForm-Noncommercial-1.0.0",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/emdzej/csfs.git",

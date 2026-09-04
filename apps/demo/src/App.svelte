@@ -355,6 +355,6 @@
 
   <footer>
     <a href="https://github.com/emdzej/csfs">Source</a>
-    <span>PolyForm Noncommercial 1.0.0</span>
+    <a href="https://github.com/emdzej/csfs/blob/main/LICENSE">MIT</a>
   </footer>
 </main>

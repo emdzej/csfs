@@ -74,5 +74,4 @@ directory, OPFS, or `node:fs` without any of them knowing about zip.
 
 ## Licence
 
-**PolyForm Noncommercial 1.0.0** — see the
-[repository](https://github.com/emdzej/csfs).
+**MIT** — see [LICENSE](https://github.com/emdzej/csfs/blob/main/LICENSE).

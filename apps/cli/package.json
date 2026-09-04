@@ -2,7 +2,7 @@
   "name": "@emdzej/csfs-cli",
   "version": "0.1.0",
   "description": "Build csfs manifests, and inspect a tree through any backend",
-  "license": "PolyForm-Noncommercial-1.0.0",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/emdzej/csfs.git",

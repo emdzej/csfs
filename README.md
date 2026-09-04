@@ -150,4 +150,4 @@ those happily.
 
 ## Licence
 
-**PolyForm Noncommercial 1.0.0** — see [`LICENSE.md`](LICENSE.md).
+**MIT** — see [`LICENSE`](LICENSE).

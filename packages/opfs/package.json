@@ -2,7 +2,7 @@
   "name": "@emdzej/csfs-opfs",
   "version": "0.1.0",
   "description": "File system over the origin private file system",
-  "license": "PolyForm-Noncommercial-1.0.0",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/emdzej/csfs.git",

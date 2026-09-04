@@ -2,8 +2,8 @@
   "name": "csfs",
   "private": true,
   "version": "0.1.0",
-  "description": "Client-side file system — one read API over HTTP, a picked directory, OPFS, and inside zip archives",
-  "license": "PolyForm-Noncommercial-1.0.0",
+  "description": "Client-side file system \u2014 one read API over HTTP, a picked directory, OPFS, and inside zip archives",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/emdzej/csfs"

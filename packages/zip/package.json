@@ -2,7 +2,7 @@
   "name": "@emdzej/csfs-zip",
   "version": "0.1.0",
   "description": "Mount a zip archive as a file system, read by range",
-  "license": "PolyForm-Noncommercial-1.0.0",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/emdzej/csfs.git",

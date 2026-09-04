@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "Browse a tree through every csfs backend, and build a manifest without a CLI",
-  "license": "PolyForm-Noncommercial-1.0.0",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "vite",
