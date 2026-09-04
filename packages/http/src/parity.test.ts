@@ -290,6 +290,23 @@ describe("HTTP and Node agree", () => {
       expect(new TextDecoder().decode(bytes!)).toBe("the extracted one");
     });
 
+    it("gives a direct URL for a real file and none for an archived one", async () => {
+      const { fs } = await openAsAConsumerWould();
+      // The distinction is the point. A real file can be handed to an <img>
+      // or an <iframe> as a URL, which lets the browser range-request and
+      // cache it; a 40 MB PDF fetched into a blob cannot show page one until
+      // all of it has arrived.
+      const real = await fs.directUrl?.("/top.txt");
+      expect(real).toBe(`${base}/top.txt`);
+
+      // Inside an archive there is no URL to give: the bytes are compressed
+      // inside a larger file, and returning the archive's own URL would load
+      // something else entirely. Null tells the caller to make a blob.
+      expect(await fs.directUrl?.("/images/bucket/one.png")).toBeNull();
+      expect(await fs.directUrl?.("/images_1.zip#/one.png")).toBeNull();
+      expect(await fs.directUrl?.("/absent.txt")).toBeNull();
+    });
+
     it("still reads a nested archive by # once mounts are in play", async () => {
       const { fs } = await openAsAConsumerWould();
       // `withArchives` under `withTransparentArchives`: both wrappers active

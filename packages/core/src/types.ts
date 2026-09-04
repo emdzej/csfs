@@ -97,6 +97,22 @@ export interface CsFileSystem {
 
   /** Does this path exist, and as what? */
   stat(path: string): Promise<CsStat | null>;
+
+  /**
+   * A URL the browser can load directly — an `<img>`, `<iframe>` or `<video>`
+   * source. Optional: only a backend whose bytes are already addressable can
+   * offer one, which in practice means HTTP.
+   *
+   * Worth asking for rather than always minting a blob. A blob URL requires
+   * downloading the whole file first, so a 40 MB PDF cannot show page one
+   * until all of it has arrived, and the browser cannot cache it between
+   * visits. A real URL lets the browser range-request and cache for itself.
+   *
+   * `null` when this path has no direct URL — it does not exist, or it lives
+   * inside an archive, where the bytes are not addressable on their own. A
+   * caller should then fall back to a blob.
+   */
+  directUrl?(path: string): Promise<string | null>;
 }
 
 export interface CsStat {

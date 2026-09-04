@@ -120,6 +120,15 @@ export function withArchives(fs: CsFileSystem, opts?: ZipFileSystemOptions): CsF
       const archive = await mount(container);
       return archive ? await archive.stat(fragments[fragments.length - 1]!) : null;
     },
+
+    async directUrl(path) {
+      const { fragments } = parsePath(path);
+      // An entry inside an archive has no URL of its own: the bytes are
+      // compressed inside a larger file, so handing back the archive's URL
+      // would load the wrong thing entirely.
+      if (fragments.length > 0) return null;
+      return (await fs.directUrl?.(path)) ?? null;
+    },
   };
 }
 
@@ -217,6 +226,23 @@ export function withTransparentArchives(
       if (file) return { kind: "file", name: basename(path), size: file.size };
       const dir = await this.directory(path);
       return dir ? { kind: "directory", name: basename(path), size: 0 } : null;
+    },
+
+    async directUrl(path) {
+      /*
+       * Only for a file that really exists.
+       *
+       * The inner backend decides, and its answer is already the right one:
+       * `HttpFileSystem.directUrl` returns null for a path its manifest does
+       * not list. So a path that only a mounted archive can serve gets null
+       * here and the caller falls back to a blob — which is correct, because
+       * the bytes are inside a zip and no URL addresses them.
+       *
+       * Asking the inner backend rather than checking `file()` first also
+       * keeps this to one lookup, and keeps "is there a real file" a question
+       * only the backend answers.
+       */
+      return (await fs.directUrl?.(path)) ?? null;
     },
   };
 }
