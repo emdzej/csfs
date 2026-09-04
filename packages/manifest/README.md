@@ -3,6 +3,9 @@
 The manifest format that lets a tree on a static host describe itself, and the
 builder that produces one.
 
+_Part of [csfs](https://github.com/emdzej/csfs) — a **c**lient **s**ide **f**ile **s**ystem: one read API over static HTTP, a picked directory,
+OPFS, and inside zip archives._
+
 ```ts
 import { buildManifest, formatManifest } from "@emdzej/csfs-manifest";
 import { nodeFileSystem } from "@emdzej/csfs-node";

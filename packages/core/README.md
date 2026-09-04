@@ -3,6 +3,9 @@
 The contract every csfs backend implements, plus the pieces they all need:
 paths, two `CsFile` implementations, MIME lookup, and a tree walker.
 
+_Part of [csfs](https://github.com/emdzej/csfs) — a **c**lient **s**ide **f**ile **s**ystem: one read API over static HTTP, a picked directory,
+OPFS, and inside zip archives._
+
 You rarely install this alone — a backend package pulls it in. Install it
 directly when you are writing a backend, or when you want to accept "any csfs
 file system" as a parameter type.

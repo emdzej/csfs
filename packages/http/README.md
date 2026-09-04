@@ -3,6 +3,9 @@
 Read a tree hosted on any static server — S3, GitHub Pages, nginx — by `Range`
 request, so a 945 MB archive can be sampled instead of downloaded.
 
+_Part of [csfs](https://github.com/emdzej/csfs) — a **c**lient **s**ide **f**ile **s**ystem: one read API over static HTTP, a picked directory,
+OPFS, and inside zip archives._
+
 ```ts
 import { httpFileSystem } from "@emdzej/csfs-http";
 

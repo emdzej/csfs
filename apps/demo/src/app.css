@@ -241,3 +241,13 @@ footer {
 footer a {
   color: var(--accent);
 }
+
+/* The name spelled out, under the wordmark. Quiet: it is a gloss, not a
+   headline, and it should not compete with the sentence below it. */
+header .expand {
+  margin: 0.15rem 0 0.6rem;
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}

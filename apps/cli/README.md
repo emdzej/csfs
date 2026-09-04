@@ -3,6 +3,9 @@
 Prepare a directory for static hosting, and inspect a tree through any csfs
 backend from a terminal.
 
+_Part of [csfs](https://github.com/emdzej/csfs) — a **c**lient **s**ide **f**ile **s**ystem: one read API over static HTTP, a picked directory,
+OPFS, and inside zip archives._
+
 ```sh
 npx @emdzej/csfs-cli manifest ./data --label "my tree"
 ```

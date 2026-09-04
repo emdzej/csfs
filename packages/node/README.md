@@ -3,6 +3,9 @@
 `node:fs` as a csfs file system. For tooling, tests, and anything that prepares
 a tree before it is served.
 
+_Part of [csfs](https://github.com/emdzej/csfs) — a **c**lient **s**ide **f**ile **s**ystem: one read API over static HTTP, a picked directory,
+OPFS, and inside zip archives._
+
 ```ts
 import { nodeFileSystem } from "@emdzej/csfs-node";
 

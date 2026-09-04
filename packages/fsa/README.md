@@ -3,6 +3,9 @@
 A directory the user picked, as a csfs file system. File System Access API,
 so Chromium-only.
 
+_Part of [csfs](https://github.com/emdzej/csfs) — a **c**lient **s**ide **f**ile **s**ystem: one read API over static HTTP, a picked directory,
+OPFS, and inside zip archives._
+
 ```ts
 import { pickDirectory, fsaFileSystem, isFsaSupported } from "@emdzej/csfs-fsa";
 

@@ -3,6 +3,9 @@
 A zip archive as a file system — read from any backend, by range, without
 unpacking it.
 
+_Part of [csfs](https://github.com/emdzej/csfs) — a **c**lient **s**ide **f**ile **s**ystem: one read API over static HTTP, a picked directory,
+OPFS, and inside zip archives._
+
 ```ts
 import { zipFromBlob, withArchives } from "@emdzej/csfs-zip";
 import { httpFileSystem } from "@emdzej/csfs-http";

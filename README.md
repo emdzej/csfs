@@ -1,5 +1,7 @@
 # csfs
 
+**C**lient **S**ide **F**ile **S**ystem.
+
 One read API for data that lives somewhere a browser can reach: a static HTTP
 host, a directory the user picked, the origin private file system — or inside a
 zip archive in any of those.

@@ -3,6 +3,9 @@
 The origin private file system, as a csfs file system. Private to your origin,
 writable, and — the reason to use it — **it never prompts**.
 
+_Part of [csfs](https://github.com/emdzej/csfs) — a **c**lient **s**ide **f**ile **s**ystem: one read API over static HTTP, a picked directory,
+OPFS, and inside zip archives._
+
 ```ts
 import { opfsFileSystem, isOpfsSupported, quota } from "@emdzej/csfs-opfs";
 

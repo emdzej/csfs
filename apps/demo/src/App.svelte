@@ -242,6 +242,7 @@
 <main>
   <header>
     <h1>csfs</h1>
+    <p class="expand">client side file system</p>
     <p>
       One read API over static HTTP, a folder, a zip archive, and the origin private file system —
       including <em>inside</em> archives, by byte range.

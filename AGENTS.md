@@ -1,7 +1,8 @@
 # Working on csfs
 
-A read API over data a browser can reach: static HTTP, a picked directory,
-OPFS, and inside zip archives in any of those. `README.md` says what it does;
+**c**lient **s**ide **f**ile **s**ystem — a read API over data a browser can
+reach: static HTTP, a picked directory, OPFS, and inside zip archives in any of
+those. `README.md` says what it does;
 this says how to work on it without undoing decisions that were made for a
 reason.
 
