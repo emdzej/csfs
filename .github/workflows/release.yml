@@ -12,13 +12,24 @@
 #     npm trust github "@emdzej/csfs-$p" --repo emdzej/csfs --file release.yml --allow-publish -y
 #   done
 #
+# Then release by tagging the version with no prefix:
+#
+#   git tag 0.1.0 && git push origin 0.1.0
+#
 # That can be done before a package exists, which is what makes a first
 # release possible without a token.
 name: Release
 
 on:
   push:
-    tags: ["v*"]
+    # Bare version tags — `0.1.0`, not `v0.1.0`. GitHub's filter patterns take
+    # character ranges and `+`, so this matches a semver-shaped tag and
+    # nothing else; a `v`-prefixed tag would not fire this workflow at all.
+    tags:
+      - "[0-9]+.[0-9]+.[0-9]+"
+      # Prereleases too: `0.2.0-rc.1` is a valid npm version, and leaving it
+      # out means a prerelease tag pushes nothing and says nothing.
+      - "[0-9]+.[0-9]+.[0-9]+-*"
   workflow_dispatch:
     inputs:
       dry-run:
@@ -83,7 +94,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" = "push" ]; then
-            TAG="${GITHUB_REF#refs/tags/v}"
+            TAG="${GITHUB_REF#refs/tags/}"
           else
             TAG="$(node -p 'require("./package.json").version')"
             echo "manual run — taking the version from the root package.json"
