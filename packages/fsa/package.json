@@ -1,6 +1,6 @@
 {
   "name": "@emdzej/csfs-fsa",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "File system over a picked directory (File System Access API)",
   "license": "MIT",
   "repository": {

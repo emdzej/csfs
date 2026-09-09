@@ -1,7 +1,7 @@
 {
   "name": "csfs",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Client-side file system \u2014 one read API over HTTP, a picked directory, OPFS, and inside zip archives",
   "license": "MIT",
   "repository": {

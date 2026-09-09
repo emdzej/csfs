@@ -6,6 +6,26 @@ those. `README.md` says what it does;
 this says how to work on it without undoing decisions that were made for a
 reason.
 
+## A case-insensitive filesystem could not be written to
+
+`FsaFileSystem.dir(path, create)` resolves each segment with `findChild`, which
+returns null for a directory that does not exist yet. It then returned null
+rather than creating it, so with `caseInsensitive: true` every write to a nested
+path failed — `csfs-opfs` included, since it is this backend underneath.
+
+Two things to take from it. `fileHandle` had the fallback (`?? (create ? name :
+null)`) and `dir` did not, so **the two resolvers have to agree about what
+absence means when creating**; if you touch one, read the other. And the failure
+was invisible: `write` throws naming the _file_, so a consumer copying a tree
+sees no bytes arrive and reads it as slowness. It was found by watching
+`navigator.storage.estimate()` stay flat.
+
+`packages/fsa` now has tests, over an in-memory `FileSystemDirectoryHandle` in
+`fake-directory.ts`. Keep that fake literal: **case-sensitive names**, and
+`getDirectoryHandle` without `create` must _reject_ with `NotFoundError` rather
+than return null. A fake that smooths either one over hides exactly the bugs
+this layer has.
+
 ## Before you finish
 
 - `pnpm check` — build, typecheck, test, formatting. All four.

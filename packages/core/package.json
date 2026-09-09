@@ -1,6 +1,6 @@
 {
   "name": "@emdzej/csfs-core",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Client-side file system: the read contract, paths, and shared file implementations",
   "license": "MIT",
   "repository": {

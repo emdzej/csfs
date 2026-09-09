@@ -161,8 +161,19 @@ export class FsaFileSystem implements WritableFileSystem {
     const promise = (async () => {
       let current: FileSystemDirectoryHandle = this.root;
       for (const name of segments(full)) {
+        /*
+         * `findChild` returns null for a directory that is not there yet, and
+         * when creating that is the normal case rather than a failure — so it
+         * falls back to the name as given, exactly as `fileHandle` does.
+         *
+         * Without the fallback, `create` could only ever descend into
+         * directories that already existed: every write to a nested path
+         * failed on a case-insensitive filesystem, and it failed by returning
+         * null from `write`, which reads as "could not be created" with no clue
+         * that the parent was the problem.
+         */
         const resolved = this.opts.caseInsensitive
-          ? await this.findChild(current, name, "directory")
+          ? ((await this.findChild(current, name, "directory")) ?? (create ? name : null))
           : name;
         if (resolved === null) return null;
         try {
