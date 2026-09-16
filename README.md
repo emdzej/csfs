@@ -37,6 +37,33 @@ a caller asking something impossible, or a host misbehaving.
 **Writing is a separate interface.** Two of the backends cannot write; a
 combined interface would make every consumer check capabilities it never uses.
 
+## Case
+
+Real data sets are inconsistent about case. A BMW install rsynced off Windows
+onto a Linux host holds `EDIABAS/Ecu/MS43.PRG` while every reference in the
+data says `ms43.prg`, and on Windows both spellings worked.
+
+```ts
+const fs = httpFileSystem(base, { caseInsensitive: true });
+const file = await fs.read("/ediabas/ecu/ms43.prg"); // found
+```
+
+Off by default, because two files differing only in case then become ambiguous
+and a consistent tree should not pay for the ambiguity. Available on `http`,
+`fsa`, `opfs` and `zip` — not on `node`, where the host filesystem has already
+decided (APFS and NTFS fold; ext4 does not) and a second layer of folding would
+only disagree with it.
+
+**A lookup answers with the name as stored, not as asked for.** `file.name` for
+the read above is `MS43.PRG`. That matters because the name gets passed on:
+ediabasx pins a variant by it, so echoing the caller's own spelling back would
+be a wrong answer that looks like a right one.
+
+What it costs differs by backend, which is why it is per-backend rather than one
+global switch. On `http` and `zip` it is one extra in-memory map, built from
+data already loaded — effectively free. On `fsa` and `opfs` there is no path
+lookup in the API at all, so it means listing a directory per segment.
+
 ## Archives
 
 Two ways in, for two different situations.
@@ -103,6 +130,27 @@ entries and the manifest grows to 14.72 MB — 1.68 MB gzipped. Declaring an
 archive is what makes the difference, because paths are what a manifest costs,
 not bytes.
 
+Per-directory indexes were measured against this rather than assumed. On a
+13,048-file BMW diagnostic install, one flat manifest is **99 kB gzipped in a
+single request**; one index per directory is **110 kB across 165 files** —
+_larger_ in total, because a directory's paths no longer share a compression
+window with the rest of the tree. Per-directory wins only when a consumer
+touches a small part of the tree, and loses the two things that matter more: a
+lookup costs a round trip per path level, and a directory can no longer be
+derived, so an archive cannot stand in for one. Sharding a flat manifest at
+declared subtrees would be the way to get the laziness without either loss.
+
+`--ignore <file>` takes gitignore-style patterns, and `<dir>/.csfsignore` is
+picked up without being asked for. Patterns **prune** rather than filter: an
+ignored directory is never walked, which is the difference between describing
+200,000 files and reading them. `csfs-manifest.json` and `.csfsignore` are
+never described — a manifest that carries its own size is wrong the moment it
+is written.
+
+After building, any paths that differ only in case are reported. They are
+reachable only one at a time by a consumer reading case-insensitively, and a
+tree that quietly hides a file looks exactly like one that never had it.
+
 The other backends need no manifest; they can list for themselves.
 
 ## Packages
@@ -123,10 +171,12 @@ The other backends need no manifest; they can list for themselves.
 
 Worth knowing before choosing one.
 
-- **HTTP** — one `Range` request per read. Needs a manifest, and needs the host
-  to honour `Range`; a host that ignores it is rejected rather than trusted,
-  because its 200 response is the whole file and using that as a slice returns
-  the wrong bytes silently.
+- **HTTP** — one `Range` request per read, and needs a manifest. A host that
+  ignores `Range` answers 200 with the whole file, so that body is never used
+  as the slice; it is sliced locally instead, and the header stops being sent.
+  Reads keep working, but each one costs a whole file — `rangesSupported` says
+  which of the two is happening, and `ranges: "require"` fails instead for a
+  consumer that would rather not download 945 MB to read 64 KB.
 - **A picked directory** — no path lookup in the API, so each path segment is a
   round trip; resolved directories are cached. **Permission does not survive a
   reload**: a handle can be stored in IndexedDB, but `queryPermission` reports

@@ -76,6 +76,31 @@ describe("ZipFileSystem", () => {
     const insensitive = zipFileSystem(fileOf("/a.zip", zip), { caseInsensitive: true });
     expect(await insensitive.file("/ms43.ipo")).not.toBeNull();
   });
+
+  it("answers with the entry name as stored, not as asked for", async () => {
+    const zip = await makeZip([{ name: "SGDAT/MS43.IPO", text: "x" }]);
+    const fs = zipFileSystem(fileOf("/a.zip", zip), { caseInsensitive: true });
+
+    const file = await fs.file("/sgdat/ms43.ipo");
+    expect(file!.name).toBe("MS43.IPO");
+    expect(file!.path).toBe("/SGDAT/MS43.IPO");
+    expect((await fs.directory("/sgdat"))!.path).toBe("/SGDAT");
+  });
+
+  it("agrees with itself about whether a folded path exists", async () => {
+    // `stat` went through the parent's listing and matched by exact name, so it
+    // said null for a path `file()` would happily read.
+    const zip = await makeZip([{ name: "SGDAT/MS43.IPO", text: "xy" }]);
+    const fs = zipFileSystem(fileOf("/a.zip", zip), { caseInsensitive: true });
+
+    expect(await fs.stat("/sgdat/ms43.ipo")).toEqual({
+      kind: "file",
+      name: "MS43.IPO",
+      size: 2,
+    });
+    expect(await fs.stat("/sgdat")).toEqual({ kind: "directory", name: "SGDAT", size: 0 });
+    expect(await fs.stat("/nope")).toBeNull();
+  });
 });
 
 describe("# addressing", () => {

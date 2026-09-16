@@ -9,24 +9,63 @@
  * which is how a backend bug becomes a failing command rather than a blank
  * page.
  */
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
+import { createRequire } from "node:module";
 import { Command } from "@commander-js/extra-typings";
 import chalk from "chalk";
+import ignore from "ignore";
 import { walkFileSystem, type CsFileSystem } from "@emdzej/csfs-core";
 import { httpFileSystem } from "@emdzej/csfs-http";
-import { buildManifest, formatManifest, MANIFEST_FILE } from "@emdzej/csfs-manifest";
+import {
+  buildManifest,
+  formatManifest,
+  ManifestIndex,
+  MANIFEST_FILE,
+} from "@emdzej/csfs-manifest";
 import { nodeFileSystem } from "@emdzej/csfs-node";
 import { withArchives } from "@emdzej/csfs-zip";
 
+/** Where `manifest` looks for ignore patterns when not told otherwise. */
+const IGNORE_FILE = ".csfsignore";
+
 /** A URL means HTTP; anything else is a directory. */
-function open(source: string): CsFileSystem {
+function open(source: string, opts: { caseInsensitive?: boolean } = {}): CsFileSystem {
   const remote = source.startsWith("http://") || source.startsWith("https://");
-  return withArchives(remote ? httpFileSystem(source) : nodeFileSystem(source));
+  const caseInsensitive = opts.caseInsensitive ?? false;
+  return withArchives(
+    remote ? httpFileSystem(source, { caseInsensitive }) : nodeFileSystem(source),
+    { caseInsensitive },
+  );
 }
+
+/**
+ * A gitignore-style matcher over csfs paths.
+ *
+ * `ignore` wants a repo-relative path with no leading slash, and a trailing
+ * slash to mean "this is a directory" — csfs paths are rooted and carry
+ * neither, so the translation happens here rather than at three call sites.
+ */
+function matcher(patterns: string): (path: string, isDir: boolean) => boolean {
+  const ig = ignore().add(patterns);
+  return (path, isDir) => {
+    const rel = path.replace(/^\/+/, "");
+    if (rel === "") return false;
+    return ig.ignores(isDir ? `${rel}/` : rel);
+  };
+}
+
+/*
+ * Read from package.json rather than written here. The literal had drifted a
+ * release behind, which is the only thing a hand-maintained version string
+ * reliably does.
+ */
+const { version } = createRequire(import.meta.url)("../package.json") as { version: string };
 
 const program = new Command("csfs")
   .description("Client-side file system tooling")
-  .version("0.1.0");
+  .version(version);
 
 program
   .command("manifest")
@@ -40,6 +79,10 @@ program
     "an archive to read in place: <archive>:<serves>[:basename]. " +
       "Repeatable. Without this an archive is just a file.",
   )
+  .option(
+    "--ignore <file>",
+    `gitignore-style patterns to leave out (default: <dir>/${IGNORE_FILE} if present)`,
+  )
   .option("-n, --dry-run", "print the summary and stop", false)
   .action(async (dir, opts) => {
     const fs = nodeFileSystem(dir);
@@ -48,6 +91,22 @@ program
       process.exitCode = 1;
       return;
     }
+
+    let ignoreFile = opts.ignore;
+    if (!ignoreFile) {
+      const candidate = resolve(dir, IGNORE_FILE);
+      if (existsSync(candidate)) ignoreFile = candidate;
+    } else if (!existsSync(ignoreFile)) {
+      console.error(chalk.red(`${ignoreFile}: no such file`));
+      process.exitCode = 1;
+      return;
+    }
+    // csfs's own two metadata files are never described. A manifest that
+    // carries its own size is wrong the moment it is written, and an ignore
+    // file is an instruction to the builder rather than part of the tree.
+    const patterns = [`${MANIFEST_FILE}\n${IGNORE_FILE}\n`];
+    if (ignoreFile) patterns.push(await readFile(ignoreFile, "utf8"));
+    const ignored = matcher(patterns.join("\n"));
 
     const archives = (opts.archive ?? []).map((spec) => {
       const [archive, serves, entry] = spec.split(":");
@@ -66,9 +125,8 @@ program
       ...(opts.label !== undefined ? { label: opts.label } : {}),
       builtAt: new Date().toISOString(),
       ...(archives.length > 0 ? { archives } : {}),
-      // A manifest that describes itself carries a size that is wrong the
-      // moment it is written, which is worse than its absence.
-      filter: (path) => !path.endsWith(`/${MANIFEST_FILE}`),
+      filter: (path) => !ignored(path, false),
+      prune: (path) => ignored(path, true),
       onProgress: (found, path) => {
         if (Date.now() - last < 250) return;
         last = Date.now();
@@ -92,6 +150,31 @@ program
         chalk.dim(`  archive ${a.archive} serves ${a.serves} (${a.entry ?? "relative"})`),
       );
     }
+    if (ignoreFile) console.log(chalk.dim(`  ignoring per ${ignoreFile}`));
+
+    // Reported whether or not anyone asked, because the hazard is not visible
+    // from here: a consumer opening this tree with `caseInsensitive` can reach
+    // only the first of each group, and a tree that quietly hides a file looks
+    // exactly like one that does not contain it.
+    const collisions = new ManifestIndex(manifest, { caseInsensitive: true }).caseCollisions;
+    if (collisions.length > 0) {
+      console.warn(
+        chalk.yellow(
+          `\n${collisions.length} path${collisions.length === 1 ? "" : "s"} differ only in case. ` +
+            `Read case-insensitively, only the first of each group is reachable:`,
+        ),
+      );
+      for (const group of collisions.slice(0, 10)) {
+        console.warn(
+          chalk.yellow(`  ${group[0]}`) + chalk.dim(` ← ${group.slice(1).join(", ")}`),
+        );
+      }
+      if (collisions.length > 10) {
+        console.warn(chalk.dim(`  … and ${collisions.length - 10} more`));
+      }
+      console.warn("");
+    }
+
     if (opts.dryRun) {
       console.log(chalk.dim("--dry-run: nothing written."));
       return;
@@ -100,7 +183,10 @@ program
     await writeFile(out, text);
     console.log(`written to ${chalk.bold(out)}`);
     console.log(
-      chalk.dim("\nServe the directory with Range support and point a client at its URL."),
+      chalk.dim(
+        "\nServe the directory and point a client at its URL. A host that honours " +
+          "`Range` is read a slice at a time; one that does not is read whole files.",
+      ),
     );
   });
 
@@ -110,8 +196,9 @@ program
   .argument("<source>", "a directory, or an http(s) URL")
   .argument("[path]", "path within the tree", "/")
   .option("-R, --recursive", "walk the whole subtree", false)
+  .option("-i, --case-insensitive", "match names without regard to case", false)
   .action(async (source, path, opts) => {
-    const fs = open(source);
+    const fs = open(source, { caseInsensitive: opts.caseInsensitive });
     if (opts.recursive) {
       let files = 0;
       let bytes = 0;
@@ -150,8 +237,9 @@ program
   .description("write a file to stdout, including one inside an archive")
   .argument("<source>", "a directory, or an http(s) URL")
   .argument("<path>", "path within the tree; may use archive.zip#/inner")
-  .action(async (source, path) => {
-    const file = await open(source).file(path);
+  .option("-i, --case-insensitive", "match names without regard to case", false)
+  .action(async (source, path, opts) => {
+    const file = await open(source, { caseInsensitive: opts.caseInsensitive }).file(path);
     if (!file) {
       console.error(chalk.red(`${path}: not found`));
       process.exitCode = 1;

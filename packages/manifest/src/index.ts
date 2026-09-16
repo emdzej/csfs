@@ -65,8 +65,17 @@ export interface Manifest {
 export interface BuildManifestOptions {
   /** Where to start. Default: the root. */
   root?: string;
-  /** Skip a file or a whole subtree. */
+  /** Skip a file. */
   filter?: (path: string, size: number) => boolean;
+  /**
+   * Skip a whole subtree, before it is walked.
+   *
+   * Distinct from `filter`, which is asked about each file *after* the walk has
+   * found it — so filtering out a 200,000-file subtree still costs the walk.
+   * This prunes: the directory is never descended into. Anything ignoring by
+   * a pattern wants this one.
+   */
+  prune?: (path: string) => boolean;
   label?: string;
   /** ISO-8601 timestamp. Omitted when absent — a builder should not guess. */
   builtAt?: string;
@@ -88,7 +97,16 @@ export async function buildManifest(
 ): Promise<Manifest> {
   const files: Record<string, number> = {};
   let found = 0;
-  for await (const entry of walkFileSystem(fs, opts.root ?? "/")) {
+  const walkOpts =
+    opts.prune === undefined
+      ? {}
+      : {
+          // `walk`'s filter sees both kinds and skips what it rejects, so
+          // rejecting only directories is what turns it into a prune.
+          filter: (entry: { kind: "file" | "directory"; path: string }): boolean =>
+            entry.kind !== "directory" || !opts.prune!(entry.path),
+        };
+  for await (const entry of walkFileSystem(fs, opts.root ?? "/", walkOpts)) {
     if (entry.kind !== "file") continue;
     if (opts.filter && !opts.filter(entry.path, entry.size)) continue;
     // The size may be 0 from a listing that does not report it; ask the file.
@@ -133,18 +151,46 @@ export function formatManifest(manifest: Manifest, opts: { pretty?: boolean } = 
   return JSON.stringify(ordered, null, opts.pretty ? 2 : 0) + "\n";
 }
 
+export interface ManifestIndexOptions {
+  /**
+   * Resolve a lookup without regard to case.
+   *
+   * Costs one extra map per index, built from paths that are already in
+   * memory, and no extra network at all — which is what makes it affordable
+   * here when it is not on a backend that has to list a directory to find out.
+   *
+   * Off by default: two paths differing only in case become ambiguous, and a
+   * tree that is consistent about case should not pay for the ambiguity. See
+   * `caseCollisions` for what to do when a tree is not.
+   */
+  caseInsensitive?: boolean;
+}
+
 /**
  * A manifest indexed for lookups.
  *
  * Built once from the flat map: a set of directories, and each directory's
  * children. Directories are *derived* from file paths, so a path only an
  * archive can answer for still appears in a listing.
+ *
+ * Every lookup answers with the **canonical** path — the one the manifest
+ * records — rather than the one asked for. That matters under
+ * `caseInsensitive`: a caller asking for `/ecu/ms43.prg` gets a file named
+ * `MS43.PRG` if that is what is on the host, because the name is then handed
+ * on to something that cares. BMW's tooling pins a variant by it.
  */
 export class ManifestIndex {
   private readonly files: Map<string, number>;
   private readonly children = new Map<string, Map<string, number | null>>();
+  /** Lower-cased path to canonical path. Empty unless case-insensitive. */
+  private readonly folded = new Map<string, string>();
+  private readonly insensitive: boolean;
 
-  constructor(readonly manifest: Manifest) {
+  constructor(
+    readonly manifest: Manifest,
+    opts: ManifestIndexOptions = {},
+  ) {
+    this.insensitive = opts.caseInsensitive ?? false;
     this.files = new Map(Object.entries(manifest.files));
     for (const path of this.files.keys()) {
       let child = path;
@@ -170,6 +216,68 @@ export class ManifestIndex {
     for (const a of manifest.archives ?? []) {
       this.addDirectory(normalizePath(a.serves));
     }
+    if (this.insensitive) this.fold();
+  }
+
+  /**
+   * Build the lower-cased index.
+   *
+   * Sorted first, so which of two colliding paths wins is a property of the
+   * tree and not of JSON key order — a manifest rebuilt from the same tree
+   * must resolve the same way, or a lookup starts depending on when the
+   * manifest was written.
+   */
+  private fold(): void {
+    const all = [...this.files.keys(), ...this.children.keys()].sort();
+    for (const path of all) {
+      const key = path.toLowerCase();
+      if (!this.folded.has(key)) this.folded.set(key, path);
+    }
+  }
+
+  /**
+   * Paths that differ only in case, grouped.
+   *
+   * Empty on a consistent tree, and empty when the index is case-sensitive
+   * since nothing is then ambiguous. Worth surfacing at build time: under
+   * `caseInsensitive` only the first of each group is reachable, and a tree
+   * that quietly hides a file is worse than one that refuses to.
+   */
+  get caseCollisions(): string[][] {
+    const groups = new Map<string, string[]>();
+    for (const path of [...this.files.keys(), ...this.children.keys()]) {
+      const key = path.toLowerCase();
+      const bucket = groups.get(key);
+      if (bucket) bucket.push(path);
+      else groups.set(key, [path]);
+    }
+    const out: string[][] = [];
+    for (const bucket of groups.values()) {
+      if (bucket.length > 1) out.push(bucket.sort());
+    }
+    return out.sort((a, b) => (a[0]! < b[0]! ? -1 : 1));
+  }
+
+  /**
+   * The path as the manifest records it, or `null` if it records nothing.
+   *
+   * The identity function on a case-sensitive index, which is why callers can
+   * route every lookup through it without paying for the option they did not
+   * ask for.
+   */
+  canonical(path: string): string | null {
+    const full = normalizePath(path);
+    if (this.files.has(full) || this.children.has(full)) return full;
+    if (!this.insensitive) return null;
+    return this.folded.get(full.toLowerCase()) ?? null;
+  }
+
+  /** As `canonical`, but falls back to the normalised path when absent. */
+  private resolve(path: string): string {
+    const full = normalizePath(path);
+    if (!this.insensitive) return full;
+    if (this.files.has(full) || this.children.has(full)) return full;
+    return this.folded.get(full.toLowerCase()) ?? full;
   }
 
   /** Record a directory, and every parent up to the root. */
@@ -186,20 +294,20 @@ export class ManifestIndex {
   }
 
   size(path: string): number | undefined {
-    return this.files.get(normalizePath(path));
+    return this.files.get(this.resolve(path));
   }
 
   hasFile(path: string): boolean {
-    return this.files.has(normalizePath(path));
+    return this.files.has(this.resolve(path));
   }
 
   hasDirectory(path: string): boolean {
-    return this.children.has(normalizePath(path));
+    return this.children.has(this.resolve(path));
   }
 
   /** Direct children of a directory: name to size, or `null` for a directory. */
   entriesOf(path: string): Map<string, number | null> {
-    return this.children.get(normalizePath(path)) ?? new Map();
+    return this.children.get(this.resolve(path)) ?? new Map();
   }
 
   get fileCount(): number {

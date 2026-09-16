@@ -67,8 +67,50 @@ handling:
   otherwise looks like a working tree whose files all happen to be documents. A
   404 means _this file_ is absent, which is normal.
 - **`RangeUnsupportedError`** — the host ignored `Range` and sent 200 with the
-  whole body. Using that as the requested slice returns the wrong bytes with no
-  error at all, which is the worst possible failure, so it is refused.
+  whole body. Using that body _as_ the requested slice returns the wrong bytes
+  with no error at all, which is the worst possible failure, so it is never
+  passed through.
+
+  It is no longer the only answer, though. Refusing was right about the hazard
+  and wrong about the remedy: the 200 body **is** the whole file, so slicing it
+  locally is also correct, and it is the version that leaves the tree readable.
+  `ranges: "auto"` (the default) does that and latches, so the header is not
+  sent again; `"require"` keeps the old behaviour for a consumer that would
+  rather fail than download 945 MB to read 64 KB; `"never"` skips the probe.
+  This error is now reserved for `"require"`, and a non-206 that is _not_ a 200
+  — a 404, a 416 — is a `BackendError` saying what actually happened, because
+  "the host ignores Range" sends you to check a server config that is fine.
+
+  The measurement that settled it: the bimmerz dongle's static handler
+  (`http_static.c:send_file`) parses no `Range` at all and answers 200 chunked,
+  so refusing made an entire deployment unreadable over a correctness argument
+  that had a correct answer available.
+
+## A lookup answers with the name as stored
+
+Every backend returns the path the _store_ records, not the path it was handed.
+Under `caseInsensitive` those differ, and all four backends got it wrong the
+same way at first: `file()` resolved `/ecu/ms43.prg` to the handle for
+`MS43.PRG` and then built the `CsFile` from the argument, so `file.name` echoed
+the caller's own spelling back.
+
+That is a wrong answer shaped like a right one, and it is load-bearing:
+bimmerz hands `file.name` to ediabasx, which pins `prgPath` and `VARIANTE` by
+it. A lowercased variant name fails several layers away from the lookup that
+caused it.
+
+So `fsa` threads the resolved segment through `dir`/`fileHandle` (`Resolved<H>`
+carries the handle _and_ its path), `zip` rebuilds the path from the walked
+nodes' own names, and `http` routes everything through
+`ManifestIndex.canonical`. If you add a resolution path, it has to do the same,
+and `stat` has to agree with `file` about it — `zip`'s `stat` went through
+`statVia`, which matches a listing by exact name, and so reported absent for a
+path `file()` would happily read.
+
+**Case-insensitivity is per-backend on purpose.** It is one in-memory map on
+`http` and `zip`, and a directory listing per path segment on `fsa` and `opfs`.
+`node` deliberately has none: the host filesystem has already decided (APFS and
+NTFS fold, ext4 does not), and a second layer would only disagree with it.
 
 ## Archives
 
@@ -152,7 +194,18 @@ code. Keep it that way.
   typechecked and exercised through the shared code, but nothing drives a real
   directory picker — that needs interaction a headless run cannot supply.
 - **`bimmerz-core` still has its own `vfs`.** The intent is for it to depend on
-  csfs instead; nothing here should depend on it.
+  csfs instead; nothing here should depend on it. 0.2.0 closed what was
+  blocking that migration — case-insensitive HTTP lookups, names answered as
+  stored, a readable tree on a host without `Range`, and symlinks surviving a
+  listing. What remains is on the bimmerz side.
+
+- **The manifest is not sharded.** A flat map is fetched whole. Measured on a
+  13,048-file tree, one manifest is 99 kB gzipped in one request against 110 kB
+  across 165 per-directory indexes, so per-directory is not the answer — but a
+  root manifest pointing at sub-manifests for _declared subtrees_ would give
+  the same laziness without costing a round trip per path level and without
+  losing derived directories. Worth it somewhere in the millions of paths; not
+  at thirteen thousand.
 
 ## Commit messages
 

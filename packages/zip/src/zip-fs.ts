@@ -20,9 +20,7 @@ import {
   bytesFile,
   dirname,
   mimeType,
-  normalizePath,
   segments,
-  statVia,
   type CsDirectory,
   type CsEntry,
   type CsFile,
@@ -126,14 +124,24 @@ export class ZipFileSystem implements CsFileSystem {
     return this.tree;
   }
 
-  private async nodeAt(path: string): Promise<Node | null> {
+  /**
+   * Walk to a node, and report the path it was found at.
+   *
+   * The path is rebuilt from the nodes' own names rather than reused from the
+   * argument, because under `caseInsensitive` the two differ — and the name a
+   * caller gets back should be the one the archive stores, not the one they
+   * happened to type.
+   */
+  private async nodeAt(path: string): Promise<{ node: Node; path: string } | null> {
     const insensitive = this.opts.caseInsensitive ?? false;
     let node: Node | undefined = await this.load();
+    const found: string[] = [];
     for (const part of segments(path)) {
       node = node?.children.get(keyOf(part, insensitive));
       if (!node) return null;
+      found.push(node.name);
     }
-    return node ?? null;
+    return node ? { node, path: `/${found.join("/")}` } : null;
   }
 
   /** Read one entry's bytes. */
@@ -160,21 +168,20 @@ export class ZipFileSystem implements CsFileSystem {
   }
 
   async file(path: string): Promise<CsFile | null> {
-    const node = await this.nodeAt(path);
-    if (!node?.entry) return null;
-    const full = normalizePath(path);
+    const found = await this.nodeAt(path);
+    if (!found?.node.entry) return null;
     // Decompressed eagerly, and only on request. A `CsFile` promises random
     // access, and a deflated entry has no seekable form — offering a lazy
     // slice would mean re-inflating from the start for every read, which is
     // slower and more surprising than doing it once.
-    const bytes = await this.readEntry(node.entry, full);
-    return bytesFile(full, bytes, mimeType(full));
+    const bytes = await this.readEntry(found.node.entry, found.path);
+    return bytesFile(found.path, bytes, mimeType(found.path));
   }
 
   async directory(path: string): Promise<CsDirectory | null> {
-    const node = await this.nodeAt(path);
-    if (!node || node.entry) return null;
-    return new ZipDirectory(this, node, normalizePath(path));
+    const found = await this.nodeAt(path);
+    if (!found || found.node.entry) return null;
+    return new ZipDirectory(this, found.node, found.path);
   }
 
   async read(path: string): Promise<Uint8Array | null> {
@@ -182,10 +189,16 @@ export class ZipFileSystem implements CsFileSystem {
   }
 
   async stat(path: string): Promise<CsStat | null> {
-    const root = await this.directory("/");
-    if (!root) return null;
-    if (segments(path).length === 0) return { kind: "directory", name: "", size: 0 };
-    return await statVia(root, path);
+    // Straight to the node rather than through `statVia`, which matches a
+    // listing by exact name and so disagreed with `file()` about whether a
+    // path existed whenever this archive was opened case-insensitively. It is
+    // also cheaper: a map walk instead of scanning the parent's children.
+    const found = await this.nodeAt(path);
+    if (!found) return null;
+    const { node } = found;
+    return node.entry
+      ? { kind: "file", name: node.name, size: node.entry.uncompressedSize }
+      : { kind: "directory", name: node.name, size: 0 };
   }
 
   /** Entry names as stored, for callers that want the flat view. */

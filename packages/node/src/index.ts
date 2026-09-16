@@ -122,13 +122,32 @@ class NodeDirectory implements CsDirectory {
     for (const e of found) {
       if (e.isDirectory()) {
         out.push({ kind: "directory", name: e.name });
-      } else if (e.isFile()) {
-        // Sizes cost a stat each. Reported anyway: a listing without them
-        // forces every caller that wants one into a second round of calls,
-        // and on a local filesystem the stat is cheap.
-        const st = await stat(join(real, e.name)).catch(() => undefined);
-        out.push({ kind: "file", name: e.name, size: st?.size ?? 0 });
+        continue;
       }
+      // A symlink is neither `isFile()` nor `isDirectory()` — `readdir` does
+      // not follow it — so testing only those two dropped every symlinked file
+      // from the listing, and therefore from any manifest built by walking.
+      // `stat` follows, which is why `file()` could read a path that `entries()`
+      // had never mentioned. Anything that is not a directory and not a plain
+      // file (a socket, a device) still falls out here.
+      if (!e.isFile() && !e.isSymbolicLink()) continue;
+      // Sizes cost a stat each. Reported anyway: a listing without them
+      // forces every caller that wants one into a second round of calls,
+      // and on a local filesystem the stat is cheap.
+      const st = await stat(join(real, e.name)).catch(() => undefined);
+      if (!st) {
+        // A broken symlink, or one pointing outside anything readable. Listed
+        // as a zero-length file rather than dropped: it *is* an entry, and a
+        // caller that tries to read it gets the failure at the point it can
+        // report which path was bad.
+        out.push({ kind: "file", name: e.name, size: 0 });
+        continue;
+      }
+      out.push(
+        st.isDirectory()
+          ? { kind: "directory", name: e.name }
+          : { kind: "file", name: e.name, size: st.size },
+      );
     }
     return out;
   }

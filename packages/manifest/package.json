@@ -1,6 +1,6 @@
 {
   "name": "@emdzej/csfs-manifest",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "The HTTP manifest format, and building one from any file system",
   "license": "MIT",
   "repository": {
@@ -45,6 +45,7 @@
     "@emdzej/csfs-core": "workspace:*"
   },
   "devDependencies": {
+    "@emdzej/csfs-node": "workspace:*",
     "@types/node": "^22.13.1"
   }
 }

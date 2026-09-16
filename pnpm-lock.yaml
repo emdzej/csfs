@@ -50,6 +50,9 @@ importers:
       commander:
         specifier: ^15.0.0
         version: 15.0.0
+      ignore:
+        specifier: ^7.0.9
+        version: 7.0.9
     devDependencies:
       '@types/node':
         specifier: ^22.13.1
@@ -139,6 +142,9 @@ importers:
         specifier: workspace:*
         version: link:../core
     devDependencies:
+      '@emdzej/csfs-node':
+        specifier: workspace:*
+        version: link:../node
       '@types/node':
         specifier: ^22.13.1
         version: 22.20.1
@@ -850,6 +856,10 @@ packages:
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
     os: [darwin]
 
+  ignore@7.0.9:
+    resolution: {integrity: sha512-brTTsvFRt5C1gGHtPst/281UjPD5t9fBqbgoMPlVWy11ZLTPfu7HxK4ZYqO9H7o/yC9rSTCI85EaQ4OoY12qYw==}
+    engines: {node: '>= 4'}
+
   is-reference@3.0.3:
     resolution: {integrity: sha512-ixkJoqQvAP88E6wLydLGGqCJsrFUnqoH6HnaczB8XmDH1oaWU+xxdptvikTgaEhtZ53Ky6YXiBuUI2WXLMCwjw==}
 
@@ -1551,6 +1561,8 @@ snapshots:
 
   fsevents@2.3.3:
     optional: true
+
+  ignore@7.0.9: {}
 
   is-reference@3.0.3:
     dependencies:

@@ -74,6 +74,74 @@ describe("case-insensitive", () => {
 
     expect(await text(await fs.file("deep/er/still/x.bin"))).toBe("streamed");
   });
+
+  /**
+   * The name a caller gets back has to be the one on disk, not the one they
+   * typed. It is passed on: bimmerz hands `file.name` to ediabasx, which pins
+   * a variant by it, so echoing `ms43.prg` back at a disk holding `MS43.PRG`
+   * is a wrong answer that looks like a right one.
+   */
+  it("answers with the name as stored, not as asked for", async () => {
+    const root = fakeDirectory();
+    const fs = fsaFileSystem(root, { caseInsensitive: true });
+    await fs.write("EDIABAS/Ecu/MS43.PRG", bytes("sgbd"));
+
+    const file = await fs.file("ediabas/ecu/ms43.prg");
+    expect(file!.name).toBe("MS43.PRG");
+    expect(file!.path).toBe("/EDIABAS/Ecu/MS43.PRG");
+    expect(await fs.stat("ediabas/ecu/ms43.prg")).toEqual({
+      kind: "file",
+      name: "MS43.PRG",
+      size: 4,
+    });
+
+    const dir = await fs.directory("ediabas/ecu");
+    expect(dir!.path).toBe("/EDIABAS/Ecu");
+    expect(await fs.stat("ediabas/ecu")).toEqual({
+      kind: "directory",
+      name: "Ecu",
+      size: 0,
+    });
+    // And through the directory, which is how a consumer holding a subtree
+    // root reaches a file.
+    expect((await dir!.file("ms43.prg"))!.name).toBe("MS43.PRG");
+  });
+
+  it("removes a file whose case differs from the path asked for", async () => {
+    // `removeEntry` takes a literal name, so without resolving it first this
+    // silently removed nothing — the one thing the option exists to prevent.
+    const root = fakeDirectory();
+    const fs = fsaFileSystem(root, { caseInsensitive: true });
+    await fs.write("Ecu/MS43.PRG", bytes("sgbd"));
+
+    await fs.remove("ecu/ms43.prg");
+
+    expect(await root.paths()).toEqual([]);
+  });
+
+  it("forgets a directory it cached after the directory is removed", async () => {
+    const root = fakeDirectory();
+    const fs = fsaFileSystem(root, { caseInsensitive: true });
+    await fs.write("Ecu/a.bin", bytes("x"));
+    // Cached under the spelling asked for, which is not the spelling on disk.
+    expect(await fs.directory("ECU")).not.toBeNull();
+
+    await fs.remove("ecu", { recursive: true });
+
+    expect(await fs.directory("ECU")).toBeNull();
+    expect(await fs.directory("Ecu")).toBeNull();
+  });
+
+  it("finds a directory that was created after a lookup missed it", async () => {
+    // A miss used to be cached forever, so `directory(p)` kept answering null
+    // after `makeDirectory(p)` had already succeeded.
+    const root = fakeDirectory();
+    const fs = fsaFileSystem(root, { caseInsensitive: true });
+
+    expect(await fs.directory("later")).toBeNull();
+    await fs.makeDirectory("later");
+    expect(await fs.directory("later")).not.toBeNull();
+  });
 });
 
 describe("case-sensitive", () => {
