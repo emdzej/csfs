@@ -169,7 +169,14 @@ jobs:
           published=() skipped=() failed=()
           for p in core manifest zip http fsa opfs node cli; do
             name="@emdzej/csfs-$p"
-            tarball="dist-npm/emdzej-csfs-$p-$VERSION.tgz"
+            # THE `./` IS LOAD-BEARING. `npm publish dist-npm/x.tgz` does not
+            # publish a tarball: npm-package-arg sees `a/b`, decides it is a
+            # GitHub shorthand, and tries to clone `dist-npm/x.tgz` as a repo —
+            # `EALLOWGIT: Refusing to fetch "github:dist-npm/..."` under npm 11,
+            # which has git specs disabled. Every release before 0.2.0 failed
+            # here and was published by hand instead. A leading `./` makes the
+            # spec unambiguously a file.
+            tarball="./dist-npm/emdzej-csfs-$p-$VERSION.tgz"
             if [ ! -f "$tarball" ]; then
               echo "::error::$tarball is missing"
               failed+=("$name")
@@ -203,7 +210,11 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && inputs.dry-run
         run: |
           set -euo pipefail
-          for t in dist-npm/*.tgz; do
+          # `./dist-npm/*`, not `dist-npm/*`, for the reason given in Publish:
+          # a bare `a/b` spec is a git shorthand to npm. The dry run has to
+          # resolve the tarball exactly as the real publish does, or it proves
+          # nothing about the step it is standing in for.
+          for t in ./dist-npm/*.tgz; do
             npm publish "$t" --provenance --access public --dry-run
           done
           echo "Nothing was published." >> "$GITHUB_STEP_SUMMARY"
