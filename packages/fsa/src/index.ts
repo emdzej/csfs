@@ -150,7 +150,12 @@ function notCreated(path: string, e: unknown): BackendError {
 }
 
 export interface FsaFileSystemOptions {
-  /** Match names without regard to case. Costs a listing per lookup. */
+  /**
+   * Match names without regard to case.
+   *
+   * Costs one listing per directory, kept and updated by this backend's own
+   * writes, rather than one per lookup.
+   */
   caseInsensitive?: boolean;
 }
 
@@ -164,6 +169,12 @@ export interface FsaFileSystemOptions {
  * that name, so echoing the caller's own casing back at it is a wrong answer
  * that looks like a right one.
  */
+/** A directory entry as its parent stores it. */
+interface Child {
+  readonly name: string;
+  readonly kind: "file" | "directory";
+}
+
 interface Resolved<H> {
   readonly handle: H;
   readonly path: string;
@@ -182,6 +193,24 @@ export class FsaFileSystem implements WritableFileSystem {
   ) {
     this.dirs.set("/", Promise.resolve({ handle: root, path: "/" }));
   }
+
+  /**
+   * Each directory's children by folded name, keyed by the directory's stored
+   * path. Case-insensitive only.
+   *
+   * Finding a name's stored spelling costs a listing of its directory, and
+   * doing that per lookup made writing n files into one directory read about
+   * n²/2 entries. So a directory is listed once and the listing kept, kept
+   * current by this backend's own writes and removals.
+   *
+   * What it cannot see is another writer — a second tab on the same OPFS, or
+   * another program on a picked directory. So only a *write* trusts a miss:
+   * a lookup that finds nothing lists again before answering null, and a name
+   * the index has that is gone on disk drops the index for that directory.
+   * The remaining exposure is a write racing another writer that has just
+   * created the same name in another case, which then exists twice.
+   */
+  private readonly names = new Map<string, Promise<Map<string, Child[]>>>();
 
   get name(): string {
     return this.root.name;
@@ -240,18 +269,24 @@ export class FsaFileSystem implements WritableFileSystem {
          * null from `write`, which reads as "could not be created" with no clue
          * that the parent was the problem.
          */
+        const here = `/${found.join("/")}`;
         const resolved = this.opts.caseInsensitive
-          ? ((await this.findChild(current, name, "directory")) ?? (create ? name : null))
+          ? ((await this.findChild(current, here, name, "directory", create))?.name ??
+            (create ? name : null))
           : name;
         if (resolved === null) return null;
         try {
           current = await current.getDirectoryHandle(resolved, { create });
         } catch (e) {
+          if (this.opts.caseInsensitive) this.stale(here);
           // Creating, a clash with a file of that name is a failure to say
           // out loud, not an absence.
           if (isAbsence(e) && !create) return null;
-          if (create) throw notCreated(`/${[...found, resolved].join("/")}`, e);
+          if (create) throw notCreated(joinPath(here, resolved), e);
           throw e;
+        }
+        if (create && this.opts.caseInsensitive) {
+          await this.noteCreated(here, { name: resolved, kind: "directory" });
         }
         found.push(resolved);
         const prefix = `/${parts.slice(0, i + 1).join("/")}`;
@@ -300,37 +335,130 @@ export class FsaFileSystem implements WritableFileSystem {
     }
   }
 
-  /** Find a child's real name, ignoring case. `null` if there is none. */
+  /** Drop the indexes of a removed subtree. Keyed by stored path, so exact. */
+  private forgetNames(path: string): void {
+    for (const key of [...this.names.keys()]) {
+      if (key === path || key.startsWith(`${path}/`)) this.names.delete(key);
+    }
+  }
+
+  /** List a directory into a folded index. */
+  private async listNames(dir: FileSystemDirectoryHandle): Promise<Map<string, Child[]>> {
+    const index = new Map<string, Child[]>();
+    for await (const [name, handle] of (dir as DirectoryHandleWithEntries).entries()) {
+      const key = name.toLowerCase();
+      const bucket = index.get(key);
+      if (bucket) bucket.push({ name, kind: handle.kind });
+      else index.set(key, [{ name, kind: handle.kind }]);
+    }
+    return index;
+  }
+
+  /** The index for a directory, listed on first use. */
+  private namesOf(
+    dir: FileSystemDirectoryHandle,
+    path: string,
+    fresh = false,
+  ): Promise<Map<string, Child[]>> {
+    let index = fresh ? undefined : this.names.get(path);
+    if (!index) {
+      index = this.listNames(dir);
+      this.names.set(path, index);
+      // A failed listing is not kept, any more than a failed walk is.
+      index.catch(() => {
+        if (this.names.get(path) === index) this.names.delete(path);
+      });
+    }
+    return index;
+  }
+
+  /** Record a name this backend just created, if its directory is indexed. */
+  private async noteCreated(path: string, child: Child): Promise<void> {
+    const index = await this.names.get(path)?.catch(() => undefined);
+    if (!index) return;
+    const key = child.name.toLowerCase();
+    const bucket = index.get(key) ?? [];
+    if (!bucket.some((c) => c.name === child.name && c.kind === child.kind)) bucket.push(child);
+    index.set(key, bucket);
+  }
+
+  /**
+   * Replace a directory's index with a listing just read.
+   *
+   * @internal — `FsaDirectory.entries` lists anyway, so the listing is not
+   * wasted.
+   */
+  noteListing(path: string, children: readonly Child[]): void {
+    if (!this.opts.caseInsensitive) return;
+    const index = new Map<string, Child[]>();
+    for (const child of children) {
+      const key = child.name.toLowerCase();
+      const bucket = index.get(key);
+      if (bucket) bucket.push(child);
+      else index.set(key, [child]);
+    }
+    this.names.set(path, Promise.resolve(index));
+  }
+
+  /**
+   * Find a child's stored name, ignoring case. `null` if there is none.
+   *
+   * `create` says what a miss means. Creating, it is the answer — the name is
+   * about to be made. Reading, the index may simply predate someone else's
+   * write, so the directory is listed again before saying no.
+   */
   private async findChild(
     dir: FileSystemDirectoryHandle,
+    path: string,
     name: string,
-    kind: "file" | "directory",
-  ): Promise<string | null>;
-  /** Find a child of either kind, ignoring case. */
-  private async findChild(
-    dir: FileSystemDirectoryHandle,
-    name: string,
-  ): Promise<{ name: string; kind: "file" | "directory" } | null>;
-  private async findChild(
-    dir: FileSystemDirectoryHandle,
-    name: string,
-    kind?: "file" | "directory",
-  ): Promise<string | { name: string; kind: "file" | "directory" } | null> {
-    const target = name.toLowerCase();
-    let folded: { name: string; kind: "file" | "directory" } | null = null;
-    for await (const [entryName, handle] of (dir as DirectoryHandleWithEntries).entries()) {
-      if (kind !== undefined && handle.kind !== kind) continue;
-      if (entryName.toLowerCase() !== target) continue;
+    kind: "file" | "directory" | undefined,
+    create = false,
+  ): Promise<Child | null> {
+    const pick = (index: Map<string, Child[]>): Child | null => {
+      const bucket = (index.get(name.toLowerCase()) ?? []).filter(
+        (c) => kind === undefined || c.kind === kind,
+      );
       // An exact spelling beats the fold, as it does on `http` and `zip`: two
       // names differing only in case are both reachable to a caller who
       // spells one exactly.
-      if (entryName === name) {
-        return kind === undefined ? { name: entryName, kind: handle.kind } : entryName;
-      }
-      folded ??= { name: entryName, kind: handle.kind };
+      return bucket.find((c) => c.name === name) ?? bucket[0] ?? null;
+    };
+    const cached = this.names.has(path);
+    const found = pick(await this.namesOf(dir, path));
+    if (found?.name === name || !cached) return found;
+    if (found) {
+      // A fold, from an index that may predate another writer's exact
+      // spelling — which should win. One handle call settles it, where a
+      // listing would cost the directory.
+      const exact = await this.exactChild(dir, name, kind);
+      if (exact) await this.noteCreated(path, exact);
+      return exact ?? found;
     }
-    if (!folded) return null;
-    return kind === undefined ? folded : folded.name;
+    if (create) return null;
+    return pick(await this.namesOf(dir, path, true));
+  }
+
+  /** Is there a child spelled exactly so? */
+  private async exactChild(
+    dir: FileSystemDirectoryHandle,
+    name: string,
+    kind: Child["kind"] | undefined,
+  ): Promise<Child | null> {
+    for (const k of kind === undefined ? (["file", "directory"] as const) : [kind]) {
+      try {
+        if (k === "file") await dir.getFileHandle(name);
+        else await dir.getDirectoryHandle(name);
+        return { name, kind: k };
+      } catch (e) {
+        if (!isAbsence(e)) throw e;
+      }
+    }
+    return null;
+  }
+
+  /** A name the index offered has gone; stop trusting that directory's index. */
+  private stale(path: string): void {
+    this.names.delete(path);
   }
 
   private async fileHandle(
@@ -343,13 +471,18 @@ export class FsaFileSystem implements WritableFileSystem {
     const parent = await this.dir(full.slice(0, full.length - name.length), create);
     if (!parent) return null;
     const resolved = this.opts.caseInsensitive
-      ? ((await this.findChild(parent.handle, name, "file")) ?? (create ? name : null))
+      ? ((await this.findChild(parent.handle, parent.path, name, "file", create))?.name ??
+        (create ? name : null))
       : name;
     if (resolved === null) return null;
     try {
       const handle = await parent.handle.getFileHandle(resolved, { create });
+      if (create && this.opts.caseInsensitive) {
+        await this.noteCreated(parent.path, { name: resolved, kind: "file" });
+      }
       return { handle, path: joinPath(parent.path, resolved) };
     } catch (e) {
+      if (this.opts.caseInsensitive) this.stale(parent.path);
       if (create) throw notCreated(joinPath(parent.path, resolved), e);
       if (isAbsence(e)) return null;
       throw e;
@@ -392,8 +525,9 @@ export class FsaFileSystem implements WritableFileSystem {
     if (!parent) return null;
     // One listing for either kind, where `file()` then `dir()` read the parent
     // twice for every directory on a case-insensitive tree.
-    const child = this.opts.caseInsensitive
-      ? await this.findChild(parent.handle, name)
+    const child: { name: string; kind: Child["kind"] | undefined } | null = this.opts
+      .caseInsensitive
+      ? await this.findChild(parent.handle, parent.path, name, undefined)
       : { name, kind: undefined };
     if (!child) return null;
     if (child.kind !== "directory") {
@@ -403,7 +537,10 @@ export class FsaFileSystem implements WritableFileSystem {
         return { kind: "file", name: child.name, size: file.size };
       } catch (e) {
         if (!isAbsence(e)) throw e;
-        if (child.kind === "file") return null;
+        if (child.kind === "file") {
+          this.stale(parent.path);
+          return null;
+        }
       }
     }
     const dir = await this.dir(joinPath(parent.path, child.name));
@@ -456,8 +593,8 @@ export class FsaFileSystem implements WritableFileSystem {
     // is tried before a directory because it is the commoner request; the
     // fallback to `name` lets the API's own NotFoundError be the error.
     const resolved = this.opts.caseInsensitive
-      ? ((await this.findChild(parent.handle, name, "file")) ??
-        (await this.findChild(parent.handle, name, "directory")) ??
+      ? ((await this.findChild(parent.handle, parent.path, name, "file"))?.name ??
+        (await this.findChild(parent.handle, parent.path, name, "directory"))?.name ??
         name)
       : name;
     try {
@@ -470,6 +607,16 @@ export class FsaFileSystem implements WritableFileSystem {
       if ((e as { name?: unknown } | null)?.name !== "NotFoundError") throw e;
     }
     this.forget(full);
+    if (this.opts.caseInsensitive) {
+      const index = await this.names.get(parent.path)?.catch(() => undefined);
+      const key = resolved.toLowerCase();
+      const rest = index?.get(key)?.filter((c) => c.name !== resolved);
+      if (index && rest) {
+        if (rest.length > 0) index.set(key, rest);
+        else index.delete(key);
+      }
+      this.forgetNames(joinPath(parent.path, resolved));
+    }
   }
 }
 
@@ -486,7 +633,9 @@ class FsaDirectory implements CsDirectory {
 
   async entries(): Promise<CsEntry[]> {
     const out: CsEntry[] = [];
+    const seen: Child[] = [];
     for await (const [name, handle] of (this.handle as DirectoryHandleWithEntries).entries()) {
+      seen.push({ name, kind: handle.kind });
       if (handle.kind === "directory") {
         out.push({ kind: "directory", name });
       } else {
@@ -496,6 +645,7 @@ class FsaDirectory implements CsDirectory {
         out.push({ kind: "file", name, size: 0 });
       }
     }
+    this.fs.noteListing(this.path, seen);
     return out;
   }
 

@@ -108,7 +108,12 @@ and `stat` has to agree with `file` about it — `zip`'s `stat` went through
 path `file()` would happily read.
 
 **Case-insensitivity is per-backend on purpose.** It is one in-memory map on
-`http` and `zip`, and a directory listing per path segment on `fsa` and `opfs`.
+`http` and `zip`, and on `fsa` and `opfs` one listing per directory, kept as an
+index that this backend's own writes keep current. Another writer — a second
+tab, another program — is the index's blind spot, so only a write trusts a
+miss: a read that misses lists again, a folded hit checks the exact spelling
+with one handle call, and a hit that has vanished drops the index. Keep those
+three if you touch it.
 `node` deliberately has none: the host filesystem has already decided (APFS and
 NTFS fold, ext4 does not), and a second layer would only disagree with it.
 
@@ -216,11 +221,6 @@ code. Keep it that way.
 - **The browser backends have no browser tests.** `fsa` and `opfs` run over
   the in-memory fake, but nothing drives a real directory picker — that needs
   interaction a headless run cannot supply.
-- **Case-insensitive `fsa` writes still list a directory per file.** Resolved
-  directories are cached, but finding a file's stored name is a listing of its
-  parent each time, so copying n files into one directory is still O(n²)
-  entries read. A per-directory name index would fix it, at the cost of going
-  stale when another tab writes.
 - **No `AbortSignal`.** Nothing in core or http takes one, so a cancelled read
   keeps downloading.
 - **`RangeFile.stream()` buffers the whole range** before yielding it. HTTP

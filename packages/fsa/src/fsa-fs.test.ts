@@ -232,7 +232,7 @@ describe("remove", () => {
 });
 
 describe("cost", () => {
-  it("lists a directory once per write, not once per segment per write", async () => {
+  it("lists a directory once, not once per write", async () => {
     const root = fakeDirectory();
     let listings = 0;
     const count = (dir: FileSystemDirectoryHandle): FileSystemDirectoryHandle => {
@@ -254,8 +254,32 @@ describe("cost", () => {
     await fs.write("/a/b/c/0.bin", bytes("x"));
     listings = 0;
     for (let i = 1; i <= 10; i++) await fs.write(`/a/b/c/${i}.bin`, bytes("x"));
-    // One listing per write, of `c`, to find the file's stored name.
-    expect(listings).toBe(10);
+    // Every directory on the way was listed by the first write, and each
+    // write since has kept the index current rather than listing again.
+    expect(listings).toBe(0);
+  });
+
+  it("sees what another writer created, and what it removed", async () => {
+    const root = fakeDirectory();
+    const fs = fsaFileSystem(root, { caseInsensitive: true });
+    const other = fsaFileSystem(root);
+    await fs.write("/d/first.bin", bytes("1"));
+    expect(await fs.file("/d/SECOND.bin")).toBeNull();
+    // Behind this instance's back, as a second tab on the same OPFS would.
+    await other.write("/d/Second.BIN", bytes("2"));
+    expect((await fs.file("/d/second.bin"))?.name).toBe("Second.BIN");
+    await other.remove("/d/first.bin");
+    expect(await fs.file("/d/FIRST.bin")).toBeNull();
+    expect(await fs.stat("/d/first.bin")).toBeNull();
+  });
+
+  it("keeps the index current through its own removals", async () => {
+    const fs = fsaFileSystem(fakeDirectory(), { caseInsensitive: true });
+    await fs.write("/d/A.bin", bytes("x"));
+    await fs.remove("/d/a.BIN");
+    expect(await fs.file("/d/A.bin")).toBeNull();
+    await fs.write("/d/a.bin", bytes("y"));
+    expect((await fs.file("/d/A.BIN"))?.name).toBe("a.bin");
   });
 
   it("stats a directory with one listing of its parent", async () => {

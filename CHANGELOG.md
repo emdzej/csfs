@@ -96,6 +96,12 @@ bump is where features land.
   cache, so each write re-listed every segment: measured on the fake, ten
   writes into `/a/b/c` now cost ten listings where they cost forty, and the
   cost no longer grows with depth. `stat` lists a parent once, not twice.
+- **Case-insensitive `fsa` and `opfs` keep each directory's listing** as a
+  folded index, updated by their own writes and removals, so writing n files
+  into one directory lists it once rather than n times. Another writer is
+  accounted for where it can be: a read that misses lists again, a folded hit
+  checks the exact spelling with one handle call, and a vanished hit drops the
+  index.
 - **`node` stats a listing's entries concurrently**, 64 at a time, rather than
   one after another.
 - **`stat` through a mount reads the central directory, not the entry.** It
