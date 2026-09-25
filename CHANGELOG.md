@@ -144,6 +144,15 @@ bump is where features land.
   it whole into a `Blob`; `..` leads back out. Object URLs are revoked however
   a preview ends, not only when replaced by another image.
 
+### Dependencies
+
+- `@zip.js/zip.js` 2.10 → 2.18, the one runtime dependency that moved.
+- Development: vitest 2 → 5, which clears all seven `pnpm audit` advisories
+  (one critical, one high); vite 6 → 8 and vite-plugin-svelte 5 → 7 for the
+  demo; patch-level prettier, turbo, svelte, ignore; the GitHub Actions to
+  their current majors. TypeScript stays on 5.9 and `@types/node` on 22, the
+  `engines` floor.
+
 ### Added
 
 - A base URL's query string — a presigned or SAS token — is carried onto every
