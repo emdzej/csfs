@@ -115,6 +115,16 @@ bump is where features land.
   for the first probe instead of each downloading the whole file, and two
   slices of one uncached file share one download. Unread bodies are cancelled.
 
+### Removed
+
+- **Core helpers re-exported from other packages**: `segments` from
+  `csfs-http`, `sep` and `statVia` from `csfs-node`, and `dirname`,
+  `formatPath` and `statVia` from `csfs-zip`. Import them from
+  `@emdzej/csfs-core`, which is where they live; `sep` is `node:path`'s. A
+  helper reachable from four packages is one whose home nobody can find, and
+  `sep` was a platform detail exported from a library whose paths are always
+  `/`.
+
 ### Packaging
 
 - **Tests are no longer published.** Every tarball through 0.2.0 carried its

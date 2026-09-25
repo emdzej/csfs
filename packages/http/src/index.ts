@@ -530,5 +530,3 @@ class HttpDirectory implements CsDirectory {
 export function httpFileSystem(baseUrl: string, opts?: HttpFileSystemOptions): HttpFileSystem {
   return new HttpFileSystem(baseUrl, opts);
 }
-
-export { segments };

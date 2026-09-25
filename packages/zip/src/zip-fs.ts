@@ -18,7 +18,6 @@ import {
   basename,
   blobFile,
   bytesFile,
-  dirname,
   mimeType,
   segments,
   type CsDirectory,
@@ -267,9 +266,6 @@ class ZipDirectory implements CsDirectory {
 export function zipFileSystem(archive: CsFile, opts?: ZipFileSystemOptions): ZipFileSystem {
   return new ZipFileSystem(archive, opts);
 }
-
-/** Re-exported so callers can build a path without importing core directly. */
-export { dirname };
 
 /**
  * Mount a `Blob` or a `File` as a file system.

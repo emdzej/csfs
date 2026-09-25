@@ -19,12 +19,9 @@
  */
 import {
   basename,
-  dirname,
-  formatPath,
   normalizePath,
   parsePath,
   segments,
-  statVia,
   type CsDirectory,
   type CsEntry,
   type CsFile,
@@ -480,6 +477,3 @@ class MergedDirectory implements CsDirectory {
     return await this.owner.directory(join(this.path, name));
   }
 }
-
-/** Re-exported for callers building paths. */
-export { formatPath, dirname, statVia };

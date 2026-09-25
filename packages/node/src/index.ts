@@ -20,7 +20,6 @@ import {
   mimeType,
   normalizePath,
   segments,
-  statVia,
   type BlobLike,
   type CsDirectory,
   type CsEntry,
@@ -264,5 +263,3 @@ class NodeDirectory implements CsDirectory {
 export function nodeFileSystem(root: string): NodeFileSystem {
   return new NodeFileSystem(root);
 }
-
-export { statVia, sep };
