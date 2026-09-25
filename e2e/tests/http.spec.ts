@@ -108,23 +108,60 @@ test.describe("reading over HTTP", () => {
     expect(name).toBe("/EDIABAS/Ecu/MS43.PRG");
   });
 
-  test("streams a range as it arrives, and stops fetching when cancelled", async ({
-    harness,
-  }) => {
+  test("streams a range the same bytes it reads", async ({ harness }) => {
     const { origin } = origins();
-    const result = await harness.evaluate(async (base) => {
+    const ok = await harness.evaluate(async (base) => {
       const fs = window.csfs.http.httpFileSystem(`${base}/data`);
-      const file = (await fs.file("/deep/nested/big.bin"))!;
-      const whole = new Uint8Array(
-        await new Response(file.slice(0, 300_000).stream()).arrayBuffer(),
-      );
-      const ok = whole.every((b, i) => b === (i * 7) % 256);
-      const reader = file.stream().getReader();
-      const first = await reader.read();
-      await reader.cancel("enough");
-      return { length: whole.length, ok, firstChunkSmall: first.value!.length < 1_000_000 };
+      const file = (await fs.file("/deep/nested/big.bin"))!.slice(1000, 301_000);
+      const whole = new Uint8Array(await new Response(file.stream()).arrayBuffer());
+      return whole.length === 300_000 && whole.every((b, i) => b === ((1000 + i) * 7) % 256);
     }, origin);
-    expect(result).toEqual({ length: 300_000, ok: true, firstChunkSmall: true });
+    expect(ok).toBe(true);
+  });
+
+  test("hands over the first bytes before the body has all been sent", async ({ harness }) => {
+    // Judged by what the server had sent, not by chunk sizes: how an engine
+    // chunks a body is its own business, and WebKit on Linux hands a fast
+    // local megabyte over in one piece — which failed an earlier version of
+    // this test that asked the chunk to be small.
+    const { origin } = origins();
+    const id = crypto.randomUUID();
+    const result = await harness.evaluate(
+      async ({ base, id }) => {
+        const fs = window.csfs.http.httpFileSystem(`${base}/trickle/${id}`);
+        const reader = (await fs.file("/deep/nested/big.bin"))!.stream().getReader();
+        const first = await reader.read();
+        const atFirst = await (await fetch(`${base}/__trickle/${id}`)).json();
+        await reader.cancel("enough");
+        return {
+          got: first.value!.length > 0,
+          sentAtFirst: atFirst.sent,
+          total: atFirst.total,
+        };
+      },
+      { base: origin, id },
+    );
+    expect(result.got).toBe(true);
+    // Had csfs read the range before streaming it, the server would be done.
+    expect(result.sentAtFirst).toBeLessThan(result.total);
+  });
+
+  test("stops the download when the stream is cancelled", async ({ harness, request }) => {
+    const { origin } = origins();
+    const id = crypto.randomUUID();
+    await harness.evaluate(
+      async ({ base, id }) => {
+        const fs = window.csfs.http.httpFileSystem(`${base}/trickle/${id}`);
+        const reader = (await fs.file("/deep/nested/big.bin"))!.stream().getReader();
+        await reader.read();
+        await reader.cancel("enough");
+      },
+      { base: origin, id },
+    );
+    // The server sees the connection go before it has sent the whole body.
+    await expect
+      .poll(async () => (await (await request.get(`${origin}/__trickle/${id}`)).json()).hungUp)
+      .toBe(true);
   });
 
   test("rejects a cancelled read with the signal's reason", async ({ harness }) => {

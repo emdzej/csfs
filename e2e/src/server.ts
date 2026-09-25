@@ -12,6 +12,12 @@
  * - `/gz/`       serves the manifest gzipped with no `Content-Encoding`.
  * - `/noexpose/` (cross-origin only) sends CORS headers but does not expose
  *                `Content-Range`, so a page cannot read it.
+ * - `/trickle/<id>/` honours `Range` but sends a body 64 KB at a time with a
+ *                pause between, and records at `/__trickle/<id>` how much it
+ *                sent and whether the client hung up first. How an engine
+ *                chunks a fast local body is its own business — WebKit on
+ *                Linux hands over a megabyte at once — so streaming and
+ *                cancelling are judged by what the *server* saw.
  *
  * The harness page is served at `/` of the same origin.
  */
@@ -42,11 +48,43 @@ function inside(root: string, urlPath: string): string | null {
   return full.startsWith(normalize(root)) ? full : null;
 }
 
+/** What a trickled response got through before it ended. */
+interface Trickle {
+  sent: number;
+  total: number;
+  hungUp: boolean;
+}
+
+const trickles = new Map<string, Trickle>();
+
+/** Write `[start, end]` of a file slowly, stopping if the client goes away. */
+async function trickle(
+  res: ServerResponse,
+  file: string,
+  start: number,
+  end: number,
+  record: Trickle,
+): Promise<void> {
+  const body = (await readFile(file)).subarray(start, end + 1);
+  record.total = body.byteLength;
+  res.on("close", () => {
+    if (record.sent < record.total) record.hungUp = true;
+  });
+  for (let at = 0; at < body.byteLength; at += 65_536) {
+    if (res.destroyed) return;
+    const chunk = body.subarray(at, at + 65_536);
+    await new Promise<void>((resolve) => res.write(chunk, () => resolve()));
+    record.sent += chunk.byteLength;
+    await new Promise((resolve) => setTimeout(resolve, 40));
+  }
+  res.end();
+}
+
 async function sendFile(
   req: IncomingMessage,
   res: ServerResponse,
   file: string,
-  opts: { ranges: boolean },
+  opts: { ranges: boolean; trickle?: Trickle },
 ): Promise<void> {
   let size: number;
   try {
@@ -79,6 +117,7 @@ async function sendFile(
   res.setHeader("accept-ranges", "bytes");
   res.setHeader("content-range", `bytes ${start}-${end}/${size}`);
   res.setHeader("content-length", String(end - start + 1));
+  if (opts.trickle) return await trickle(res, file, start, end, opts.trickle);
   createReadStream(file, { start, end }).pipe(res);
 }
 
@@ -99,6 +138,21 @@ function handler(
         res.statusCode = 204;
         return void res.end();
       }
+    }
+    const stats = /^\/__trickle\/([\w-]+)$/.exec(path);
+    if (stats) {
+      res.setHeader("content-type", "application/json");
+      return void res.end(JSON.stringify(trickles.get(stats[1]!) ?? null));
+    }
+    const slow = /^\/trickle\/([\w-]+)(\/.*)$/.exec(path);
+    if (slow) {
+      const [, id, rest] = slow as unknown as [string, string, string];
+      const file = inside(tree, rest);
+      if (!file) return void res.writeHead(403).end();
+      if (rest === `/${MANIFEST_FILE}`) return await sendFile(req, res, file, { ranges: true });
+      const record: Trickle = { sent: 0, total: 0, hungUp: false };
+      trickles.set(id, record);
+      return await sendFile(req, res, file, { ranges: true, trickle: record });
     }
     const route = /^\/(data|norange|spa|gz|noexpose)(\/.*)$/.exec(path);
     if (!route) {
