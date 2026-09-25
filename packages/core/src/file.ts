@@ -91,6 +91,21 @@ export type RangeReader = (
   signal?: AbortSignal,
 ) => Promise<Uint8Array>;
 
+/** Streams a byte range. Cancelling the stream cancels the read. */
+export type RangeStreamer = (start: number, end: number) => ReadableStream<Uint8Array>;
+
+/**
+ * What a `RangeFile` reads through: a reader, and optionally a streamer.
+ *
+ * Without a streamer, `stream()` reads the whole range and yields it as one
+ * chunk — correct, but for a large range it holds all of it before the first
+ * byte reaches the caller. A backend that can stream supplies one.
+ */
+export interface RangeSource {
+  readonly read: RangeReader;
+  readonly stream?: RangeStreamer;
+}
+
 /** An offset as `Blob.slice` reads one: NaN is 0, a fraction truncates. */
 function toOffset(n: number): number {
   return Number.isNaN(n) ? 0 : Math.trunc(n);
@@ -108,10 +123,12 @@ export class RangeFile implements CsFile {
   readonly path: string;
   readonly name: string;
 
+  private readonly source: RangeSource;
+
   constructor(
     path: string,
     private readonly total: number,
-    private readonly read: RangeReader,
+    source: RangeReader | RangeSource,
     private readonly mime = "",
     /** Window into the underlying object: `[start, end)`. */
     private readonly start = 0,
@@ -119,6 +136,7 @@ export class RangeFile implements CsFile {
   ) {
     this.path = path;
     this.name = basename(path.split("#").at(-1) ?? path);
+    this.source = typeof source === "function" ? { read: source } : source;
   }
 
   get size(): number {
@@ -142,13 +160,13 @@ export class RangeFile implements CsFile {
     const to = end < 0 ? Math.max(0, size + end) : Math.min(end, size);
     const lo = this.start + from;
     const hi = this.start + Math.max(from, to);
-    return new RangeFile(this.path, this.total, this.read, this.mime, lo, hi);
+    return new RangeFile(this.path, this.total, this.source, this.mime, lo, hi);
   }
 
   async bytes(opts?: ReadOptions): Promise<Uint8Array> {
     opts?.signal?.throwIfAborted();
     if (this.size === 0) return new Uint8Array(0);
-    return await this.read(this.start, this.end, opts?.signal);
+    return await this.source.read(this.start, this.end, opts?.signal);
   }
 
   async arrayBuffer(opts?: ReadOptions): Promise<ArrayBuffer> {
@@ -162,8 +180,16 @@ export class RangeFile implements CsFile {
   }
 
   stream(): ReadableStream<Uint8Array> {
-    // One chunk. A backend that can stream natively should override this by
-    // supplying its own `CsFile`; this is the correct-but-simple fallback.
+    if (this.size === 0) {
+      return new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.close();
+        },
+      });
+    }
+    if (this.source.stream) return this.source.stream(this.start, this.end);
+    // One chunk: the correct-but-simple fallback for a source that cannot
+    // stream.
     const self = this;
     const cancel = new AbortController();
     return new ReadableStream<Uint8Array>({

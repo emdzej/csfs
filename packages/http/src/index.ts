@@ -136,6 +136,42 @@ function contentRange(res: Response): [number, number] | null {
   return m ? [Number(m[1]), Number(m[2])] : null;
 }
 
+/** A range once opened: a response still to consume, or bytes already cut. */
+type Opened =
+  { readonly partial: Response; readonly url: string } | { readonly whole: Uint8Array };
+
+function shortRead(expected: number, got: number, url: string): BackendError {
+  return new BackendError(
+    `asked for ${expected} bytes, got ${got} — the manifest and the host disagree ` +
+      `about this file's length`,
+    url,
+  );
+}
+
+/** Pass a body through, failing it if it is not exactly this long. */
+function exactLength(expected: number, url: string): TransformStream<Uint8Array, Uint8Array> {
+  let seen = 0;
+  return new TransformStream({
+    transform(chunk, controller) {
+      seen += chunk.byteLength;
+      if (seen > expected) throw shortRead(expected, seen, url);
+      controller.enqueue(chunk);
+    },
+    flush() {
+      if (seen !== expected) throw shortRead(expected, seen, url);
+    },
+  });
+}
+
+function oneChunk(bytes: Uint8Array): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      if (bytes.byteLength > 0) controller.enqueue(bytes);
+      controller.close();
+    },
+  });
+}
+
 /** A manifest, uploaded gzipped or not. */
 async function manifestJson(res: Response, url: string): Promise<unknown> {
   let bytes = new Uint8Array(await res.arrayBuffer());
@@ -291,9 +327,54 @@ export class HttpFileSystem implements CsFileSystem {
     return new RangeFile(
       canonical,
       size,
-      (start, end, signal) => this.readRange(canonical, size, start, end, signal),
+      {
+        read: (start, end, signal) => this.readRange(canonical, size, start, end, signal),
+        stream: (start, end) => this.streamRange(canonical, size, start, end),
+      },
       mimeType(canonical),
     );
+  }
+
+  /**
+   * Open a range: a response to read or stream, or — from a host that ignores
+   * `Range` — the slice already cut from the whole body.
+   *
+   * The only place a range is requested, so reading and streaming cannot
+   * disagree about what a response means.
+   */
+  private async openRange(
+    path: string,
+    size: number,
+    start: number,
+    end: number,
+    signal?: AbortSignal,
+  ): Promise<Opened> {
+    signal?.throwIfAborted();
+    if (this.ranges === undefined && this.probe) {
+      // Someone is already finding out; their answer decides how to ask.
+      await untilAborted(this.probe, signal);
+      return this.openRange(path, size, start, end, signal);
+    }
+    // `"auto"` stops asking once a host has shown it ignores the header:
+    // the probe is only worth one round trip, not one per read.
+    if (this.ranges === false) {
+      return { whole: (await this.wholeBody(path, size, signal)).slice(start, end) };
+    }
+    const opening = this.rangeResponse(path, size, start, end, signal);
+    if (this.ranges === undefined) {
+      // Settles either way and never rejects: its failure is the reader's to
+      // report, not an unhandled rejection when nobody else was waiting.
+      const probe: Promise<void> = opening
+        .then(
+          () => {},
+          () => {},
+        )
+        .finally(() => {
+          if (this.probe === probe) this.probe = undefined;
+        });
+      this.probe = probe;
+    }
+    return opening;
   }
 
   /** The only place bytes are fetched. `size` is what the manifest says. */
@@ -306,40 +387,60 @@ export class HttpFileSystem implements CsFileSystem {
   ): Promise<Uint8Array> {
     signal?.throwIfAborted();
     if (end <= start) return new Uint8Array(0);
-    if (this.ranges === undefined && this.probe) {
-      // Someone is already finding out; their answer decides how to ask.
-      await untilAborted(this.probe, signal);
-      return this.readRange(path, size, start, end, signal);
-    }
-    // `"auto"` stops asking once a host has shown it ignores the header:
-    // the probe is only worth one round trip, not one per read.
-    if (this.ranges === false) {
-      return (await this.wholeBody(path, size, signal)).slice(start, end);
-    }
-    const request = this.rangeRequest(path, size, start, end, signal);
-    if (this.ranges === undefined) {
-      // Settles either way and never rejects: its failure is the reader's to
-      // report, not an unhandled rejection when nobody else was waiting.
-      const probe: Promise<void> = request
-        .then(
-          () => {},
-          () => {},
-        )
-        .finally(() => {
-          if (this.probe === probe) this.probe = undefined;
-        });
-      this.probe = probe;
-    }
-    return request;
+    const opened = await this.openRange(path, size, start, end, signal);
+    if ("whole" in opened) return opened.whole;
+    const bytes = new Uint8Array(await opened.partial.arrayBuffer());
+    if (bytes.byteLength !== end - start)
+      throw shortRead(end - start, bytes.byteLength, opened.url);
+    return bytes;
   }
 
-  private async rangeRequest(
+  /**
+   * A range as a stream, straight from the response body.
+   *
+   * `RangeFile`'s own `stream()` reads the whole range first, which for the
+   * 945 MB archive this backend exists to sample means holding all of it
+   * before the first byte reaches the caller. The length is still checked, as
+   * it passes: a stream that ends short errors rather than ending cleanly.
+   */
+  private streamRange(
+    path: string,
+    size: number,
+    start: number,
+    end: number,
+  ): ReadableStream<Uint8Array> {
+    const cancel = new AbortController();
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    return new ReadableStream<Uint8Array>({
+      pull: async (controller) => {
+        if (!reader) {
+          const opened = await this.openRange(path, size, start, end, cancel.signal);
+          const body =
+            "whole" in opened
+              ? oneChunk(opened.whole)
+              : (opened.partial.body ?? oneChunk(new Uint8Array(0))).pipeThrough(
+                  exactLength(end - start, opened.url),
+                );
+          reader = body.getReader();
+        }
+        const { done, value } = await reader.read();
+        if (done) controller.close();
+        else controller.enqueue(value);
+      },
+      cancel: async (reason) => {
+        cancel.abort(reason);
+        await reader?.cancel(reason);
+      },
+    });
+  }
+
+  private async rangeResponse(
     path: string,
     size: number,
     start: number,
     end: number,
     signal?: AbortSignal,
-  ): Promise<Uint8Array> {
+  ): Promise<Opened> {
     const url = this.url(path);
     const res = await this.fetchImpl(url, {
       headers: { Range: `bytes=${start}-${end - 1}` },
@@ -372,7 +473,8 @@ export class HttpFileSystem implements CsFileSystem {
       // A 206 is not proof of the *asked-for* bytes. A host clamps a range to
       // the file it has, so a manifest that says the file is longer gets a
       // short read here; a proxy may answer with a different range entirely.
-      // Either one used as the slice is wrong bytes with no error.
+      // Either one used as the slice is wrong bytes with no error. The length
+      // is checked by whoever consumes the body.
       const got = contentRange(res);
       if (got && (got[0] !== start || got[1] !== end - 1)) {
         discard(res);
@@ -382,15 +484,7 @@ export class HttpFileSystem implements CsFileSystem {
           url,
         );
       }
-      const bytes = new Uint8Array(await res.arrayBuffer());
-      if (bytes.byteLength !== end - start) {
-        throw new BackendError(
-          `asked for ${end - start} bytes, got ${bytes.byteLength} — the manifest and ` +
-            `the host disagree about this file's length`,
-          url,
-        );
-      }
-      return bytes;
+      return { partial: res, url };
     }
     // The host ignored the header, so this body is the *whole* file. Using it
     // as the slice would hand back the wrong bytes with no error at all — so
@@ -402,7 +496,7 @@ export class HttpFileSystem implements CsFileSystem {
     this.ranges = false;
     const bytes = await this.checkedBody(res, url, size);
     this.remember(path, bytes);
-    return bytes.slice(start, end);
+    return { whole: bytes.slice(start, end) };
   }
 
   /** A whole body, refused if it is not the length the manifest records. */

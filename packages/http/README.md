@@ -92,6 +92,9 @@ One `Range` request per read. Requests within a file are independent, so
 concurrent reads become concurrent requests — a depth-3 index lookup costs one
 round trip's latency rather than three.
 
+`stream()` pipes the response body as it arrives rather than reading the range
+first, and still checks its length: a body that ends short errors the stream.
+
 Without `Range`, each file is downloaded once and kept while it fits in
 `wholeFileCacheBytes` (16 MiB by default), so the several slices that opening
 one archive takes cost one download. Concurrent reads share it.

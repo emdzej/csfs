@@ -189,6 +189,18 @@ describe("HTTP and Node agree", () => {
     }
   });
 
+  it("streams the same bytes it reads", async () => {
+    const local = (await nodeFileSystem(dir).file("/deep/nested/big.bin"))!;
+    const remote = (await httpFileSystem(base).file("/deep/nested/big.bin"))!;
+    for (const file of [remote, remote.slice(12_345, 250_000)]) {
+      const streamed = new Uint8Array(await new Response(file.stream()).arrayBuffer());
+      expect(streamed).toEqual(await file.bytes());
+    }
+    expect(new Uint8Array(await new Response(remote.stream()).arrayBuffer())).toEqual(
+      await local.bytes(),
+    );
+  });
+
   it("clamps an over-long range the same way on both", async () => {
     const local = await nodeFileSystem(dir).file("/top.txt");
     const remote = await httpFileSystem(base).file("/top.txt");

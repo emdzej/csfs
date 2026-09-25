@@ -59,17 +59,17 @@ one interface would make every consumer check capabilities it never uses.
 
 ## What is in here
 
-| Export                                                                               | Why                                                                                                     |
-| ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
-| `BlobFile`                                                                           | a `CsFile` over anything `Blob`-shaped                                                                  |
-| `RangeFile`                                                                          | a `CsFile` over a `(start, end, signal?) => Promise<Uint8Array>` reader; `slice` composes by arithmetic |
-| `shared`, `untilAborted`                                                             | one piece of work for several readers, cancelled only when all of them have given up                    |
-| `bytesFile`, `blobFile`, `toBlob`, `objectUrl`                                       | constructing files and getting a URL for an `<img>`                                                     |
-| `parsePath`, `formatPath`, `normalizePath`                                           | `#` fragment addressing, and `..` resolved without escaping the root                                    |
-| `dirname`, `basename`, `extname`, `joinPath`, `segments`                             | path arithmetic that does not import `node:path`                                                        |
-| `mimeType`, `registerMimeType`                                                       | extension → type, so `file.type` is populated on backends that do not report one                        |
-| `walk`, `walkFileSystem`, `resolveFile`, `resolveDirectory`, `statVia`               | depth-first iteration, and the shared implementations of "resolve a path one segment at a time"         |
-| `NotDataError`, `RangeUnsupportedError`, `BackendError`, `UnsupportedOperationError` | the failures worth telling apart                                                                        |
+| Export                                                                               | Why                                                                                             |
+| ------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| `BlobFile`                                                                           | a `CsFile` over anything `Blob`-shaped                                                          |
+| `RangeFile`                                                                          | a `CsFile` over a range reader, and optionally a streamer; `slice` composes by arithmetic       |
+| `shared`, `untilAborted`                                                             | one piece of work for several readers, cancelled only when all of them have given up            |
+| `bytesFile`, `blobFile`, `toBlob`, `objectUrl`                                       | constructing files and getting a URL for an `<img>`                                             |
+| `parsePath`, `formatPath`, `normalizePath`                                           | `#` fragment addressing, and `..` resolved without escaping the root                            |
+| `dirname`, `basename`, `extname`, `joinPath`, `segments`                             | path arithmetic that does not import `node:path`                                                |
+| `mimeType`, `registerMimeType`                                                       | extension → type, so `file.type` is populated on backends that do not report one                |
+| `walk`, `walkFileSystem`, `resolveFile`, `resolveDirectory`, `statVia`               | depth-first iteration, and the shared implementations of "resolve a path one segment at a time" |
+| `NotDataError`, `RangeUnsupportedError`, `BackendError`, `UnsupportedOperationError` | the failures worth telling apart                                                                |
 
 `RangeFile` is the one to understand if you are writing a backend: give it a
 size and a range reader, and slicing is free — `slice(100, 200).slice(10, 20)`

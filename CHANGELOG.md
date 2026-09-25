@@ -177,6 +177,12 @@ bump is where features land.
   stops only when every reader waiting on it has aborted, through a new
   `shared()` helper in core. `Blob` and `File` still satisfy `CsFile`: they
   ignore the argument.
+- **`csfs-http` streams.** `stream()` on an HTTP file pipes the response body
+  instead of reading the whole range first, which for a large range meant
+  holding all of it before the first byte reached the caller. The length is
+  checked as it passes, so a short body errors the stream rather than ending
+  it cleanly, and cancelling the stream aborts the request. `RangeFile` takes
+  a `{ read, stream }` source for any backend that can do the same.
 - A base URL's query string — a presigned or SAS token — is carried onto every
   request.
 - A manifest uploaded gzipped without `Content-Encoding` is recognised by its

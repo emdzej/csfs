@@ -231,8 +231,6 @@ code. Keep it that way.
 - **The browser backends have no browser tests.** `fsa` and `opfs` run over
   the in-memory fake, but nothing drives a real directory picker — that needs
   interaction a headless run cannot supply.
-- **`RangeFile.stream()` buffers the whole range** before yielding it. HTTP
-  could stream `res.body` instead.
 - **`bimmerz-core` still has its own `vfs`.** The intent is for it to depend on
   csfs instead; nothing here should depend on it. 0.2.0 closed what was
   blocking that migration — case-insensitive HTTP lookups, names answered as

@@ -550,3 +550,82 @@ describe("HttpFileSystem, cancelled", () => {
     expect(requests).toBe(1);
   });
 });
+
+describe("HttpFileSystem, streamed", () => {
+  /** A 206 whose body arrives a chunk at a time, only as fast as it is read. */
+  function trickling(chunks: Uint8Array[], contentRange?: string) {
+    const signals: (AbortSignal | undefined)[] = [];
+    let sent = 0;
+    const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes("/csfs-manifest.json")) {
+        return new Response(JSON.stringify(MANIFEST), {
+          headers: { "content-type": "application/json" },
+        });
+      }
+      signals.push(init?.signal ?? undefined);
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          const next = chunks[sent++];
+          if (next) controller.enqueue(next);
+          else controller.close();
+        },
+      });
+      return new Response(body, {
+        status: 206,
+        headers: contentRange ? { "content-range": contentRange } : {},
+      });
+    }) as typeof globalThis.fetch;
+    return { impl, signals, sent: () => sent };
+  }
+
+  it("yields the body as it arrives, not once it has all arrived", async () => {
+    const whole = pattern(256);
+    const chunks = Array.from({ length: 16 }, (_, i) => whole.subarray(i * 16, i * 16 + 16));
+    const { impl, sent } = trickling(chunks);
+    const fs = httpFileSystem("http://host/data", { fetch: impl });
+    const reader = (await fs.file("/deep/nested/b.bin"))!.stream().getReader();
+    const first = await reader.read();
+    expect(first.value).toEqual(whole.subarray(0, 16));
+    // The first chunk reached the caller with most of the body still unsent;
+    // streams read a chunk or two ahead, not to the end.
+    expect(sent()).toBeLessThan(5);
+    const rest: Uint8Array[] = [first.value!];
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      rest.push(value);
+    }
+    expect(new Uint8Array(await new Blob(rest as BlobPart[]).arrayBuffer())).toEqual(whole);
+  });
+
+  it("fails a stream that ends short, rather than ending it cleanly", async () => {
+    const { impl } = trickling([pattern(100)]);
+    const fs = httpFileSystem("http://host/data", { fetch: impl });
+    const stream = (await fs.file("/deep/nested/b.bin"))!.stream();
+    await expect(new Response(stream).arrayBuffer()).rejects.toThrow(/asked for 256 bytes/);
+  });
+
+  it("aborts the request when the stream is cancelled", async () => {
+    const { impl, signals } = trickling([pattern(100), pattern(156)]);
+    const fs = httpFileSystem("http://host/data", { fetch: impl });
+    const reader = (await fs.file("/deep/nested/b.bin"))!.stream().getReader();
+    await reader.read();
+    await reader.cancel(new Error("enough"));
+    expect(signals[0]?.aborted).toBe(true);
+  });
+
+  it("streams a slice from a host that ignores Range, cut from the whole body", async () => {
+    const body = pattern(256);
+    const impl = (async (input: RequestInfo | URL) =>
+      String(input).includes("/csfs-manifest.json")
+        ? new Response(JSON.stringify(MANIFEST), {
+            headers: { "content-type": "application/json" },
+          })
+        : new Response(body, { status: 200 })) as typeof globalThis.fetch;
+    const fs = httpFileSystem("http://host/data", { fetch: impl });
+    const stream = (await fs.file("/deep/nested/b.bin"))!.slice(10, 20).stream();
+    expect(new Uint8Array(await new Response(stream).arrayBuffer())).toEqual(
+      body.subarray(10, 20),
+    );
+  });
+});
