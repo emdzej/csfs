@@ -301,3 +301,19 @@ describe("cost", () => {
     expect(await text(await fs.file("/x/A.BIN"))).toBe("upper");
   });
 });
+
+describe("on a host that folds case itself, as WebKit's OPFS does", () => {
+  it("answers with the stored name, not an alias the host accepted", async () => {
+    const fs = fsaFileSystem(fakeDirectory("root", { folds: true }), { caseInsensitive: true });
+    await fs.write("/EPC/DATA1/PREF.BIN", bytes("hello"));
+    await fs.write("/epc/data1/other.bin", bytes("second"));
+    // `epc` opens `EPC` on such a host; that success is not an exact match.
+    expect((await fs.file("/epc/data1/pref.bin"))!.path).toBe("/EPC/DATA1/PREF.BIN");
+    expect((await fs.directory("/epc"))!.path).toBe("/EPC");
+    expect(await fs.stat("/epc/data1/pref.bin")).toEqual({
+      kind: "file",
+      name: "PREF.BIN",
+      size: 5,
+    });
+  });
+});

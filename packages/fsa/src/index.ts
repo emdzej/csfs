@@ -102,25 +102,42 @@ interface PermissionCapable {
   requestPermission?(opts?: { mode?: PermissionMode }): Promise<PermissionState>;
 }
 
-/** Can this handle be used without asking? */
+/**
+ * Can this handle be used without asking?
+ *
+ * `true` where the browser has no permission API on handles at all — Firefox
+ * and Safari, for an OPFS handle — because there access is simply whatever
+ * the handle already has. Reading a missing `queryPermission` as "no" made
+ * those handles look permanently locked: this said false, and `requestAccess`
+ * could not change it. Measured in the e2e suite: Firefox answered `false`
+ * for an OPFS directory it could read and write.
+ */
 export async function queryAccess(
   handle: FileSystemDirectoryHandle,
   mode: PermissionMode = "read",
 ): Promise<boolean> {
+  const query = (handle as PermissionCapable).queryPermission;
+  if (typeof query !== "function") return true;
   try {
-    return (await (handle as PermissionCapable).queryPermission?.({ mode })) === "granted";
+    return (await query.call(handle, { mode })) === "granted";
   } catch {
     return false;
   }
 }
 
-/** Ask for access. **Must be called from a click or a keypress.** */
+/**
+ * Ask for access. **Must be called from a click or a keypress.**
+ *
+ * `true` without asking where there is no permission API, as `queryAccess`.
+ */
 export async function requestAccess(
   handle: FileSystemDirectoryHandle,
   mode: PermissionMode = "read",
 ): Promise<boolean> {
+  const request = (handle as PermissionCapable).requestPermission;
+  if (typeof request !== "function") return true;
   try {
-    return (await (handle as PermissionCapable).requestPermission?.({ mode })) === "granted";
+    return (await request.call(handle, { mode })) === "granted";
   } catch {
     return false;
   }
@@ -212,6 +229,9 @@ export class FsaFileSystem implements WritableFileSystem {
    * created the same name in another case, which then exists twice.
    */
   private readonly names = new Map<string, Promise<Map<string, Child[]>>>();
+
+  /** Learned, not configured: set once the host is seen to fold case itself. */
+  private hostFolds = false;
 
   get name(): string {
     return this.root.name;
@@ -431,7 +451,7 @@ export class FsaFileSystem implements WritableFileSystem {
       // A fold, from an index that may predate another writer's exact
       // spelling — which should win. One handle call settles it, where a
       // listing would cost the directory.
-      const exact = await this.exactChild(dir, name, kind);
+      const exact = await this.exactChild(dir, path, name, found, kind);
       if (exact) await this.noteCreated(path, exact);
       return exact ?? found;
     }
@@ -439,20 +459,46 @@ export class FsaFileSystem implements WritableFileSystem {
     return pick(await this.namesOf(dir, path, true));
   }
 
-  /** Is there a child spelled exactly so? */
+  /**
+   * Is there a child spelled exactly so, besides the folded match?
+   *
+   * On Chromium and Firefox, opening a name succeeds only for an entry stored
+   * under it, so success answers the question. WebKit's OPFS folds case as its
+   * disk does: `getDirectoryHandle("epc")` opens `EPC`, the handle calls
+   * itself `epc`, and `isSameEntry` compares paths and says the two differ —
+   * so nothing on the handle tells an alias from a second entry. Taking the
+   * success at its word answered with the caller's spelling. Found by the e2e
+   * suite.
+   *
+   * The listing does tell them apart: it shows only stored names. So a
+   * success is checked against a fresh one, and a name that opens without
+   * being listed means the host folds — where two names differing only in
+   * case cannot both exist, and this question need never be asked again.
+   */
   private async exactChild(
     dir: FileSystemDirectoryHandle,
+    path: string,
     name: string,
+    folded: Child,
     kind: Child["kind"] | undefined,
   ): Promise<Child | null> {
+    if (this.hostFolds) return null;
     for (const k of kind === undefined ? (["file", "directory"] as const) : [kind]) {
       try {
         if (k === "file") await dir.getFileHandle(name);
         else await dir.getDirectoryHandle(name);
-        return { name, kind: k };
       } catch (e) {
         if (!isAbsence(e)) throw e;
+        continue;
       }
+      if (k !== folded.kind) return { name, kind: k };
+      const fresh = await this.namesOf(dir, path, true);
+      const listed = fresh
+        .get(name.toLowerCase())
+        ?.some((c) => c.name === name && c.kind === k);
+      if (listed) return { name, kind: k };
+      this.hostFolds = true;
+      return null;
     }
     return null;
   }

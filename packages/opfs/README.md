@@ -58,6 +58,16 @@ close**, so write traffic roughly doubles. Avoidable with
 `createSyncAccessHandle` inside a worker, which is the right move for a bulk
 import.
 
+## Things engines do differently
+
+- **Case.** Chromium's and Firefox's OPFS are case-sensitive; WebKit's follows
+  its disk and folds on macOS. With `caseInsensitive`, csfs answers with the
+  stored name either way.
+- **`persist()` may prompt.** Firefox asks the user and waits, so bound it:
+  `await persist({ signal: AbortSignal.timeout(5000) })`.
+- **Private windows.** Safari's has `getDirectory` and rejects it with
+  `UnknownError`; `isOpfsSupported()` cannot tell.
+
 ## Relationship to `csfs-fsa`
 
 OPFS _is_ the File System Access API, pointed at a browser-managed root, so this

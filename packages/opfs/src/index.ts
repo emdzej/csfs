@@ -19,6 +19,7 @@
  *   backend does not use it. Writes here stage and swap, as on a picked
  *   directory.
  */
+import { untilAborted } from "@emdzej/csfs-core";
 import { FsaFileSystem, type FsaFileSystemOptions } from "@emdzej/csfs-fsa";
 
 type Removable = FileSystemDirectoryHandle & {
@@ -42,7 +43,13 @@ function namespaceParts(namespace: string): string[] {
   return parts;
 }
 
-/** Is OPFS available? */
+/**
+ * Is OPFS available?
+ *
+ * Whether the API exists, not whether it works: Safari in a private window
+ * has `getDirectory` and rejects it with `UnknownError`, so `opfsFileSystem`
+ * can still fail where this said yes.
+ */
 export function isOpfsSupported(): boolean {
   return (
     typeof navigator !== "undefined" && typeof navigator.storage?.getDirectory === "function"
@@ -78,11 +85,16 @@ export async function opfsFileSystem(
  * Worth doing before writing anything large. The browser decides, and may say
  * no without explanation, so the answer is returned rather than thrown — a
  * consumer can still proceed, it just cannot promise the data will survive.
+ *
+ * **It may never answer.** Firefox shows the user a prompt, and the promise
+ * waits on them; with nobody there — or a user who ignores it — it does not
+ * settle. Pass a signal (`AbortSignal.timeout(5000)`) and an abort counts as
+ * no. Found by the e2e suite, where headless Firefox left it pending forever.
  */
-export async function persist(): Promise<boolean> {
+export async function persist(opts: { signal?: AbortSignal } = {}): Promise<boolean> {
   try {
     if (await navigator.storage.persisted()) return true;
-    return await navigator.storage.persist();
+    return await untilAborted(navigator.storage.persist(), opts.signal);
   } catch {
     return false;
   }
