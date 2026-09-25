@@ -106,9 +106,22 @@ export interface RangeSource {
   readonly stream?: RangeStreamer;
 }
 
-/** An offset as `Blob.slice` reads one: NaN is 0, a fraction truncates. */
+/**
+ * An offset as `Blob.slice` reads one: Web IDL's `[Clamp] long long`, so NaN is
+ * 0 and a fraction rounds to the nearest integer, ties to even.
+ *
+ * Rounded, not truncated. Truncating matched Node 22's `Blob`, which gets it
+ * wrong; Node 24's follows the spec, and CI on 24 caught the difference —
+ * `slice(1.9, 4.2)` is bytes 2–3, not 1–3.
+ */
 function toOffset(n: number): number {
-  return Number.isNaN(n) ? 0 : Math.trunc(n);
+  if (Number.isNaN(n)) return 0;
+  if (!Number.isFinite(n)) return n;
+  const floor = Math.floor(n);
+  const diff = n - floor;
+  if (diff < 0.5) return floor;
+  if (diff > 0.5) return floor + 1;
+  return floor % 2 === 0 ? floor : floor + 1;
 }
 
 /**

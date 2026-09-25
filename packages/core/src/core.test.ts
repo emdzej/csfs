@@ -61,12 +61,24 @@ describe("RangeFile", () => {
       [90, 200],
       [50, 40],
       [NaN, 3],
-      [1.9, 4.2],
       [undefined, undefined],
     ] as const) {
       const ours = await file.slice(a, b).bytes();
       const theirs = new Uint8Array(await blob.slice(a, b).arrayBuffer());
       expect(ours, `slice(${a}, ${b})`).toEqual(theirs);
+    }
+  });
+
+  it("rounds fractional offsets as Web IDL's [Clamp] does, ties to even", async () => {
+    // Against the spec's values, not a `Blob`'s: Node 22's truncates, Node 24's
+    // rounds, and only the second is right.
+    for (const [a, b, from, to] of [
+      [1.9, 4.2, 2, 4],
+      [2.5, 5.5, 2, 6],
+      [3.5, 6.5, 4, 6],
+      [-2.5, undefined, 98, 100],
+    ] as const) {
+      expect(await file.slice(a, b).bytes(), `slice(${a}, ${b})`).toEqual(data.slice(from, to));
     }
   });
 

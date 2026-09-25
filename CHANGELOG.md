@@ -106,7 +106,8 @@ These can change what working code does:
   read-only) instead of a bare "could not be created".
 - **`RangeFile.slice` let NaN and fractions through**, making `size` NaN or
   putting a fractional `Range` header on the wire. Offsets are made whole as
-  `Blob.slice` makes them.
+  Web IDL says `Blob.slice` makes them: rounded, ties to even. Node 22's
+  `Blob` truncates instead, and matching it was wrong; CI on Node 24 caught it.
 - `walkFileSystem(fs, "a/b")` yielded paths without their leading slash;
   `node` listed an unreadable directory as empty where `fsa` threw, and called
   a socket a file in `stat` while `file()` would not open it; `stat("/").name`
