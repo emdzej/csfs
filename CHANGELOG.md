@@ -9,7 +9,9 @@ bump is where features land.
 
 ## 0.3.0
 
-An audit of the whole tree, and a first run in real browsers. Most of it is
+An audit of the whole tree, and the first end-to-end tests in real browsers —
+csfs has always run in them, in the apps that use it, but nothing tested it there
+until now. Most of it is
 fixes to reads that were wrong without saying so; the rest is what those fixes
 made possible — cancellable reads, streaming over HTTP, stored zip entries read
 by range — and an `e2e/` suite that found three more on its first run.
@@ -164,10 +166,11 @@ These can change what working code does:
 - `csfs-cli` is published, as the release workflow already did; `AGENTS.md`
   said it was private.
 
-### Found in real browsers
+### Found by the browser tests
 
 An `e2e/` suite now runs the libraries in Chromium, Firefox and WebKit with
-Playwright. On its first run it found three things Node could not:
+Playwright. On its first run it found three things the unit tests, under Node,
+could not:
 
 - **WebKit's OPFS folds case**, following the disk on macOS, and a handle
   opened by an alias names itself as asked while `isSameEntry` denies it is
