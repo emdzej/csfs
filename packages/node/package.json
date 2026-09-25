@@ -1,6 +1,6 @@
 {
   "name": "@emdzej/csfs-node",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "File system over node:fs, for tooling and tests",
   "license": "MIT",
   "repository": {

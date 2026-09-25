@@ -7,7 +7,34 @@ combination is coherent.
 Versions follow [semantic versioning](https://semver.org/). Before 1.0 a minor
 bump is where features land.
 
-## Unreleased
+## 0.3.0
+
+An audit of the whole tree, and a first run in real browsers. Most of it is
+fixes to reads that were wrong without saying so; the rest is what those fixes
+made possible — cancellable reads, streaming over HTTP, stored zip entries read
+by range — and an `e2e/` suite that found three more on its first run.
+
+### Upgrading from 0.2.0
+
+These can change what working code does:
+
+- **Core helpers are no longer re-exported** from `csfs-http`, `csfs-node` or
+  `csfs-zip`. Import `segments`, `statVia`, `dirname` and `formatPath` from
+  `@emdzej/csfs-core`, and `sep` from `node:path`.
+- **`remove()` succeeds for a path already absent, and throws
+  `UnsupportedOperationError` for the root**, on `fsa`, `opfs` and `node`
+  alike. `node` used to delete the root; `fsa` used to throw `NotFoundError`
+  for an absent path.
+- **`fsa` no longer answers null for an error that is not absence.** A lapsed
+  permission (`NotAllowedError`) or a quota failure now rejects.
+- **`csfs-http` rejects a response that disagrees with the manifest** — a short
+  `206`, a `206` for another range, a whole body of the wrong size — where it
+  used to return the short read.
+- **A zip entry is inflated on its first read, not at lookup**, so a wrong
+  password or a corrupt entry now fails the read rather than `file()`.
+- `opfsFileSystem` reports `kind: "opfs"`; `wholeFileCacheBytes` is a budget
+  over several bodies, not one slot; `queryAccess` answers `true` where the
+  browser has no permission API; every package requires Node 22.
 
 ### Fixed
 

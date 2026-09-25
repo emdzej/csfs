@@ -1,6 +1,6 @@
 {
   "name": "@emdzej/csfs-cli",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Build csfs manifests, and inspect a tree through any backend",
   "license": "MIT",
   "repository": {

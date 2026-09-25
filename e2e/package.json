@@ -1,6 +1,6 @@
 {
   "name": "@emdzej/csfs-e2e",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "csfs in real browsers: Chromium, Firefox and WebKit, driven by Playwright",
   "license": "MIT",
