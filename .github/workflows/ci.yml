@@ -17,8 +17,16 @@ permissions:
 
 jobs:
   check:
-    name: Build, typecheck, test
+    name: Build, typecheck, test (Node ${{ matrix.node }})
     runs-on: ubuntu-latest
+    strategy:
+      # Both, to the end: a failure on one version says more beside the other's
+      # result than it does alone.
+      fail-fast: false
+      matrix:
+        # What `engines` promises. Release runs on 24, and a package that only
+        # ever ran there would be promising 22 on faith.
+        node: [22, 24]
     steps:
       - uses: actions/checkout@v4
 
@@ -28,7 +36,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ matrix.node }}
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
@@ -37,8 +45,9 @@ jobs:
         run: pnpm build
 
       - name: Typecheck
-        # `svelte-check` is separate from `tsc`: it is the only thing that reads
-        # the demo's templates.
+        # Every package, the demo's templates through `svelte-check`, and the
+        # tests through `tsconfig.test.json` — they are left out of each
+        # package's own build so that none of them is published.
         run: pnpm typecheck
 
       - name: Test

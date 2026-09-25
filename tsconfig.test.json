@@ -1,0 +1,18 @@
+{
+  // The tests, and the fake they share, typechecked on their own.
+  //
+  // Each package's own tsconfig excludes them, so that `dist` — which is what
+  // `files` publishes — holds no test that imports `vitest`, a dependency no
+  // consumer has. Checked here instead, against the packages' *sources* by the
+  // same mapping vitest resolves them through, so a test is checked against
+  // the code it actually runs.
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node"],
+    "paths": {
+      "@emdzej/csfs-*": ["./packages/*/src/index.ts"]
+    }
+  },
+  "include": ["packages/*/src/**/*.ts", "vitest.config.ts"]
+}

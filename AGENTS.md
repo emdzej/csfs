@@ -156,7 +156,25 @@ code. Keep it that way.
 - **`fetch` must be bound.** `private readonly fetchImpl: typeof fetch = fetch`
   makes `this.fetchImpl(...)` a _method_ call, so the browser's `fetch` receives
   the object as its `this` and throws "Illegal invocation". Node tolerates it,
-  so the mistake passes every server-side test and fails only in a tab.
+  so the mistake passes every server-side test and fails only in a tab. That
+  goes for an _injected_ `fetch` as well: wrap it too, because
+  `{ fetch: window.fetch }` is the obvious thing for a caller to pass.
+- **Check the status before the content type.** A 404 page is HTML, and so is a
+  file the manifest lists as `index.html`; neither is a sign the tree is
+  elsewhere. `NotDataError` is for a _successful_ answer that is a web page
+  where data was expected.
+- **Do not cache a rejected promise.** `x ??= load()` keeps a failure for the
+  object's lifetime, so one dropped connection breaks it for good. Every cache
+  of a load — the manifest, a zip's central directory, a mount — drops a
+  failure once it settles.
+- **Tests are not built.** Each package's tsconfig excludes `*.test.ts` (and
+  `fsa`'s fake), because `files: ["dist"]` published whatever was built, and
+  every tarball through 0.2.0 shipped tests importing a `vitest` no consumer
+  has. `tsconfig.test.json` typechecks them instead, and vitest resolves
+  `@emdzej/csfs-*` to each package's _source_, so a bare `pnpm test` cannot run
+  against a stale `dist`. After changing a tsconfig's `include`/`exclude`,
+  delete `dist` and build with `turbo run build --force`: `tsc -b` does not
+  remove outputs it no longer produces, and turbo will cache them.
 - **A directory handle's permission does not survive a reload.** Store the
   handle in IndexedDB — it is structured-cloneable — but expect
   `queryPermission` to say `"prompt"`, and remember `requestPermission` only
@@ -168,8 +186,11 @@ code. Keep it that way.
   on close. That is the right default — a crash leaves the old file rather than
   a truncated one — but it is worth knowing before writing gigabytes.
 - **A listing may report size 0.** A handle-backed backend would need a
-  `getFile()` per entry, so it does not do one; `walk` asks the file when a size
-  is actually wanted. Do not treat 0 as empty.
+  `getFile()` per entry, so it does not do one; `buildManifest` asks the file
+  when a size is actually wanted. Do not treat 0 as empty.
+- **Only absence is null.** `fsa` once caught every error, so a directory whose
+  permission had lapsed (`NotAllowedError`) listed as empty rather than
+  locked. Catch `NotFoundError` and `TypeMismatchError`; let the rest through.
 
 ## Repository facts
 
@@ -180,8 +201,10 @@ code. Keep it that way.
 - **No data in the repository.** Tests build their own fixtures — including
   their archives, with `zip.js`, so a fixture is a real archive rather than a
   hand-rolled byte array that might not resemble one.
-- `@emdzej/csfs-*` is the package prefix. `csfs-cli` is private; the libraries
-  are publishable.
+- `@emdzej/csfs-*` is the package prefix. All eight are published, the CLI
+  included (`npx @emdzej/csfs-cli manifest ./data`); only the demo is private.
+- **Node 22+.** `engines` says so and CI runs 22 and 24; `fs.openAsBlob` alone
+  would allow 19.8, but nothing older than 22 is tested.
 
 ## Known gaps
 
@@ -190,9 +213,18 @@ code. Keep it that way.
   `@emdzej/csfs-cache`, as a decorator over any backend.
 - **No writer for archives.** Reading is done; building one is not, so a tree
   cannot be _packed_ by csfs.
-- **The browser backends have no browser tests.** `fsa` and `opfs` are
-  typechecked and exercised through the shared code, but nothing drives a real
-  directory picker — that needs interaction a headless run cannot supply.
+- **The browser backends have no browser tests.** `fsa` and `opfs` run over
+  the in-memory fake, but nothing drives a real directory picker — that needs
+  interaction a headless run cannot supply.
+- **Case-insensitive `fsa` writes still list a directory per file.** Resolved
+  directories are cached, but finding a file's stored name is a listing of its
+  parent each time, so copying n files into one directory is still O(n²)
+  entries read. A per-directory name index would fix it, at the cost of going
+  stale when another tab writes.
+- **No `AbortSignal`.** Nothing in core or http takes one, so a cancelled read
+  keeps downloading.
+- **`RangeFile.stream()` buffers the whole range** before yielding it. HTTP
+  could stream `res.body` instead.
 - **`bimmerz-core` still has its own `vfs`.** The intent is for it to depend on
   csfs instead; nothing here should depend on it. 0.2.0 closed what was
   blocking that migration — case-insensitive HTTP lookups, names answered as

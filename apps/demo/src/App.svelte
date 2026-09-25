@@ -11,13 +11,13 @@
    * for static hosting without installing anything.
    */
   import {
+    dirname,
+    parsePath,
     walkFileSystem,
-    type CsDirectory,
     type CsEntry,
     type CsFile,
     type CsFileSystem,
     objectUrl,
-    toBlob,
   } from "@emdzej/csfs-core";
   import { isFsaSupported, pickArchive, pickDirectory, fsaFileSystem } from "@emdzej/csfs-fsa";
   import { httpFileSystem } from "@emdzej/csfs-http";
@@ -25,22 +25,35 @@
   import { isOpfsSupported, opfsFileSystem, quota } from "@emdzej/csfs-opfs";
   import { withArchives, withTransparentArchives, zipFromBlob } from "@emdzej/csfs-zip";
 
+  type Preview = { file: CsFile; text?: string; url?: string };
+
   let fs = $state<CsFileSystem | undefined>(undefined);
   let label = $state("");
   let path = $state("/");
   let entries = $state<CsEntry[]>([]);
   let error = $state<string | undefined>(undefined);
   let busy = $state<string | undefined>(undefined);
-  let preview = $state<{ file: CsFile; text?: string; url?: string } | undefined>(undefined);
+  let preview = $state<Preview | undefined>(undefined);
   let url = $state("");
   let manifestText = $state<string | undefined>(undefined);
   let stats = $state<string | undefined>(undefined);
 
   const supported = { fsa: isFsaSupported(), opfs: isOpfsSupported() };
 
+  /**
+   * Every preview change goes through here, so an object URL is revoked
+   * whichever way its preview ends — closed, replaced by a text file, or left
+   * by navigating. Only replacing one image with another used to revoke, so
+   * every other route pinned the image in memory for the life of the tab.
+   */
+  function setPreview(next: Preview | undefined): void {
+    if (preview?.url && preview.url !== next?.url) URL.revokeObjectURL(preview.url);
+    preview = next;
+  }
+
   async function open(next: CsFileSystem, name: string): Promise<void> {
     error = undefined;
-    preview = undefined;
+    setPreview(undefined);
     manifestText = undefined;
     fs = next;
     label = name;
@@ -50,7 +63,7 @@
   async function go(to: string): Promise<void> {
     if (!fs) return;
     error = undefined;
-    preview = undefined;
+    setPreview(undefined);
     try {
       const dir = await fs.directory(to);
       if (!dir) {
@@ -81,44 +94,53 @@
     // Only the first 64 KB, and only for text. A 300 MB file rendered into the
     // DOM would hang the tab, and the point here is to prove the read worked.
     if (TEXTUAL.test(file.type)) {
-      preview = { file, text: await file.slice(0, 65_536).text() };
+      setPreview({ file, text: await file.slice(0, 65_536).text() });
       return;
     }
     if (file.type.startsWith("image/") || file.type === "application/pdf") {
-      // Revoked when the preview closes or is replaced; a page that mints one
-      // per image and never revokes pins every image it has ever shown.
-      if (preview?.url) URL.revokeObjectURL(preview.url);
-      preview = { file, url: await objectUrl(file) };
+      setPreview({ file, url: await objectUrl(file) });
       return;
     }
-    preview = { file };
+    setPreview({ file });
   }
 
+  /** A child's path, including under an archive root like `/a.zip#/`. */
+  const child = (dir: string, name: string): string =>
+    dir.endsWith("/") ? `${dir}${name}` : `${dir}/${name}`;
+
   async function openEntry(entry: CsEntry): Promise<void> {
-    const next = `${path === "/" ? "" : path}/${entry.name}`;
+    const next = child(path, entry.name);
     if (entry.kind === "directory") return void go(next);
+    // A zip inside the tree is stepped into with `#`, through the same file
+    // system — every source here is wrapped in `withArchives`. So it is read
+    // by range, as the header promises; it used to be downloaded whole and
+    // copied into a `Blob`, twice over in memory, and `..` could not get back.
+    if (entry.name.toLowerCase().endsWith(".zip")) return void go(`${next}#/`);
     if (!fs) return;
     const file = await fs.file(next);
     if (!file) {
       error = `${next}: could not be read`;
       return;
     }
-    // A zip inside the tree can be stepped into, which is what `#` is for.
-    if (entry.name.toLowerCase().endsWith(".zip")) {
-      await open(withArchives(zipFromBlob(await asBlob(file), { path: next })), `${label} ▸ ${entry.name}`);
-      return;
-    }
     await show(file);
   }
 
-  /** A `CsFile` is not a `Blob`; make one from its bytes. */
-  async function asBlob(file: CsFile): Promise<File> {
-    return new File([toBlob(await file.bytes(), file.type)], file.name, { type: file.type });
+  /** One level up, out of an archive when at its root. */
+  function parentOf(p: string): string | undefined {
+    if (p === "/") return undefined;
+    const { base, fragments } = parsePath(p);
+    const last = fragments.at(-1);
+    if (last === undefined) return dirname(base);
+    const outer = [base, ...fragments.slice(0, -1)].join("#");
+    if (last !== "/") return `${outer}#${dirname(last)}`;
+    // At an archive's root, up is the directory holding the archive — which
+    // for a nested one is a directory inside the archive around it.
+    if (fragments.length === 1) return dirname(base);
+    const holder = fragments.at(-2)!;
+    return `${[base, ...fragments.slice(0, -2)].join("#")}#${dirname(holder)}`;
   }
 
-  const parent = $derived(
-    path === "/" ? undefined : path.slice(0, path.lastIndexOf("/")) || "/",
-  );
+  const parent = $derived(parentOf(path));
 
   async function openHttp(): Promise<void> {
     if (!url.trim()) return;
@@ -228,7 +250,9 @@
     a.href = URL.createObjectURL(blob);
     a.download = "csfs-manifest.json";
     a.click();
-    URL.revokeObjectURL(a.href);
+    // Not straight away: revoking in the same task can cancel the download
+    // before the browser has started it.
+    setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
   }
 
   const bytes = (n: number) =>
@@ -253,7 +277,7 @@
     <div class="row">
       <input
         bind:value={url}
-        placeholder="https://host/tree — needs a csfs-manifest.json and Range support"
+        placeholder="https://host/tree — needs a csfs-manifest.json"
         aria-label="HTTP tree URL"
         onkeydown={(e) => e.key === "Enter" && openHttp()}
       />
@@ -321,7 +345,7 @@
           <span class="size">{bytes(preview.file.size)}</span>
           <span class="note">{preview.file.type || "unknown type"}</span>
           <span class="spacer"></span>
-          <button onclick={() => (preview = undefined)}>close</button>
+          <button onclick={() => setPreview(undefined)}>close</button>
         </div>
         {#if preview.text !== undefined}
           <pre>{preview.text}</pre>

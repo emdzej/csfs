@@ -1,7 +1,11 @@
 name: Deploy the demo
 
+# After CI, not beside it. On `push` a commit that failed its tests deployed
+# anyway, because nothing tied the two workflows together.
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
 
@@ -18,9 +22,14 @@ concurrency:
 
 jobs:
   build:
+    # A `workflow_run` fires for a failed CI too; only a green one deploys.
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The commit CI passed, not whatever main has moved on to since.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -28,7 +37,9 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
-      - run: pnpm build
+      # The libraries only. The demo is built once, below, with its base path;
+      # `pnpm build` built it here first for nothing.
+      - run: pnpm turbo run build --filter='@emdzej/csfs-demo^...'
 
       - name: Work out the base path
         id: base

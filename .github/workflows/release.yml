@@ -68,7 +68,9 @@ jobs:
         # place entirely.
         run: |
           set -euo pipefail
-          npm install -g npm@latest
+          # A major, not `latest`: this job holds `id-token: write`, and what
+          # runs with it should change when this file does, not when npm ships.
+          npm install -g npm@11
           echo "node $(node --version), npm $(npm --version)"
           node -e '
             const [maj, min, pat] = process.versions.node.split(".").map(Number);
@@ -138,6 +140,22 @@ jobs:
           done
           pnpm --filter "@emdzej/csfs-cli" pack --pack-destination dist-npm
           ls -la dist-npm
+
+      - name: Check no tarball carries tests
+        # Each tsconfig excludes them, so this holds today. It is asserted
+        # because it did not hold for three releases: every `dist` shipped its
+        # `*.test.js`, importing a `vitest` no consumer has.
+        run: |
+          set -euo pipefail
+          fail=0
+          for t in dist-npm/*.tgz; do
+            if tar -tzf "$t" | grep -E '\.test\.|fake-directory'; then
+              echo "::error::$t contains test files"
+              fail=1
+            fi
+          done
+          [ "$fail" = 0 ] || exit 1
+          echo "no test files in any tarball"
 
       - name: Check no tarball still carries a workspace dependency
         # The failure this guards against is silent at publish time and total at

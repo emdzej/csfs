@@ -109,6 +109,36 @@ bump is where features land.
   for the first probe instead of each downloading the whole file, and two
   slices of one uncached file share one download. Unread bodies are cancelled.
 
+### Packaging
+
+- **Tests are no longer published.** Every tarball through 0.2.0 carried its
+  `dist/*.test.js` — and `csfs-fsa` its in-memory fake — importing a `vitest`
+  that no consumer has. The package tsconfigs exclude them, `tsconfig.test.json`
+  typechecks them, and the release checks no tarball contains one.
+- Every package declares `engines: { node: ">=22" }`, which CI now runs
+  alongside 24, `sideEffects: false`, and exports `./package.json`.
+- `csfs-cli` is published, as the release workflow already did; `AGENTS.md`
+  said it was private.
+
+### Tooling
+
+- The demo deploys after CI passes, not beside it.
+- vitest resolves the packages to their sources, so `pnpm test` without a
+  build no longer tests the last build of everything else.
+- The release installs `npm@11`, not `npm@latest`, in the job that holds the
+  publishing credential.
+
+### Apps
+
+- **`csfs cat` and `csfs ls` mount the archives a manifest declares**, as the
+  demo does. `csfs cat <url> /drawings/1132/1132C000.png` said "not found" for
+  a file the same tree served a browser. A local directory is mounted from its
+  manifest when it has one. `--archive` refuses a mode other than `basename`
+  or `relative` rather than reading a typo as `relative`.
+- **The demo steps into a zip by range**, through `#`, rather than downloading
+  it whole into a `Blob`; `..` leads back out. Object URLs are revoked however
+  a preview ends, not only when replaced by another image.
+
 ### Added
 
 - A base URL's query string — a presigned or SAS token — is carried onto every

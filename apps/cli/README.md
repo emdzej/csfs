@@ -36,7 +36,7 @@ csfs manifest ./data \
   --archive "/images_1.zip:/images"
 ```
 
-The spec is `<archive>:<serves>[:basename]`, and it is repeatable — several
+The spec is `<archive>:<serves>[:basename|:relative]`, and it is repeatable — several
 archives may serve one directory, which is how a multi-disc data set is
 described without renaming anything.
 
@@ -61,11 +61,19 @@ csfs cat https://data.example.test /pr/index.dat | xxd | head
 
 # and inside an archive, over the network, without downloading it
 csfs cat https://data.example.test "/drawings.zip#/1132C000.png" > out.png
+
+# or through a mount the manifest declares, as a browser would read it
+csfs cat https://data.example.test /drawings/1132/1132C000.png > out.png
 ```
 
+Archives the manifest declares are mounted, so a path reads the same here as in
+a client — including a local directory that has a manifest in it.
+
 That last one is the thing worth trying after a deploy: if it works, the host
-honours `Range` and the manifest is correct. If the host silently ignores
-`Range`, csfs says so rather than handing back the wrong bytes.
+honours `Range` and the manifest is correct. A host that ignores `Range` still
+works — whole files are downloaded and sliced locally — and a manifest that
+disagrees with the host about a file's length is reported rather than read
+short.
 
 ## Prefer not to install Node?
 

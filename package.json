@@ -2,7 +2,7 @@
   "name": "csfs",
   "private": true,
   "version": "0.2.0",
-  "description": "Client-side file system — one read API over HTTP, a picked directory, OPFS, and inside zip archives",
+  "description": "Client-side file system \u2014 one read API over HTTP, a picked directory, OPFS, and inside zip archives",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -16,8 +16,8 @@
     "cli": "node apps/cli/dist/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "turbo run typecheck && pnpm --filter @emdzej/csfs-demo typecheck",
-    "check": "turbo run build typecheck && pnpm test && prettier --check .",
+    "typecheck": "turbo run typecheck && tsc -p tsconfig.test.json",
+    "check": "turbo run build typecheck && tsc -p tsconfig.test.json && vitest run && prettier --check .",
     "format": "prettier --write .",
     "clean": "turbo run clean"
   },
@@ -27,5 +27,8 @@
     "turbo": "^2.4.2",
     "typescript": "^5.7.3",
     "vitest": "^2.1.9"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

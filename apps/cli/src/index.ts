@@ -23,21 +23,45 @@ import {
   formatManifest,
   ManifestIndex,
   MANIFEST_FILE,
+  parseManifest,
+  type ManifestArchive,
 } from "@emdzej/csfs-manifest";
 import { nodeFileSystem } from "@emdzej/csfs-node";
-import { withArchives } from "@emdzej/csfs-zip";
+import { withArchives, withTransparentArchives } from "@emdzej/csfs-zip";
 
 /** Where `manifest` looks for ignore patterns when not told otherwise. */
 const IGNORE_FILE = ".csfsignore";
 
-/** A URL means HTTP; anything else is a directory. */
-function open(source: string, opts: { caseInsensitive?: boolean } = {}): CsFileSystem {
+/**
+ * A URL means HTTP; anything else is a directory.
+ *
+ * Mounted with the archives the tree's manifest declares, as the demo mounts
+ * them. Without that, `csfs cat <url> /drawings/1132/1132C000.png` said "not
+ * found" for a file the same tree served to a browser — the one tool meant to
+ * show what a client sees, showing something else. A local directory is
+ * mounted from its manifest too, when it has one.
+ */
+async function open(
+  source: string,
+  opts: { caseInsensitive?: boolean } = {},
+): Promise<CsFileSystem> {
   const remote = source.startsWith("http://") || source.startsWith("https://");
   const caseInsensitive = opts.caseInsensitive ?? false;
-  return withArchives(
-    remote ? httpFileSystem(source, { caseInsensitive }) : nodeFileSystem(source),
-    { caseInsensitive },
-  );
+  let mounts: ManifestArchive[] = [];
+  let base: CsFileSystem;
+  if (remote) {
+    const http = httpFileSystem(source, { caseInsensitive });
+    mounts = await http.archives();
+    base = http;
+  } else {
+    base = nodeFileSystem(source);
+    const manifest = resolve(source, MANIFEST_FILE);
+    if (existsSync(manifest)) {
+      mounts = parseManifest(JSON.parse(await readFile(manifest, "utf8"))).archives ?? [];
+    }
+  }
+  const fs = withArchives(base, { caseInsensitive });
+  return mounts.length > 0 ? withTransparentArchives(fs, mounts, { caseInsensitive }) : fs;
 }
 
 /**
@@ -76,7 +100,7 @@ program
   .option("--pretty", "indent the JSON — larger, but readable in a diff", false)
   .option(
     "--archive <spec...>",
-    "an archive to read in place: <archive>:<serves>[:basename]. " +
+    "an archive to read in place: <archive>:<serves>[:basename|:relative]. " +
       "Repeatable. Without this an archive is just a file.",
   )
   .option(
@@ -108,17 +132,29 @@ program
     if (ignoreFile) patterns.push(await readFile(ignoreFile, "utf8"));
     const ignored = matcher(patterns.join("\n"));
 
-    const archives = (opts.archive ?? []).map((spec) => {
-      const [archive, serves, entry] = spec.split(":");
-      if (!archive || !serves) {
-        throw new Error(`--archive ${spec}: expected <archive>:<serves>[:basename]`);
+    const archives: ManifestArchive[] = [];
+    for (const spec of opts.archive ?? []) {
+      const [archive, serves, entry, ...rest] = spec.split(":");
+      // A typo in the mode is refused rather than read as "relative": a flat
+      // archive mounted relative serves nothing, and says nothing about why.
+      if (
+        !archive ||
+        !serves ||
+        rest.length > 0 ||
+        (entry !== undefined && entry !== "basename" && entry !== "relative")
+      ) {
+        console.error(
+          chalk.red(`--archive ${spec}: expected <archive>:<serves>[:basename|:relative]`),
+        );
+        process.exitCode = 1;
+        return;
       }
-      return {
+      archives.push({
         archive,
         serves,
         ...(entry === "basename" ? { entry: "basename" as const } : {}),
-      };
-    });
+      });
+    }
 
     let last = Date.now();
     const manifest = await buildManifest(fs, {
@@ -198,7 +234,7 @@ program
   .option("-R, --recursive", "walk the whole subtree", false)
   .option("-i, --case-insensitive", "match names without regard to case", false)
   .action(async (source, path, opts) => {
-    const fs = open(source, { caseInsensitive: opts.caseInsensitive });
+    const fs = await open(source, { caseInsensitive: opts.caseInsensitive });
     if (opts.recursive) {
       let files = 0;
       let bytes = 0;
@@ -239,7 +275,8 @@ program
   .argument("<path>", "path within the tree; may use archive.zip#/inner")
   .option("-i, --case-insensitive", "match names without regard to case", false)
   .action(async (source, path, opts) => {
-    const file = await open(source, { caseInsensitive: opts.caseInsensitive }).file(path);
+    const fs = await open(source, { caseInsensitive: opts.caseInsensitive });
+    const file = await fs.file(path);
     if (!file) {
       console.error(chalk.red(`${path}: not found`));
       process.exitCode = 1;
