@@ -38,6 +38,12 @@ _promise_, so two concurrent lookups share one read of it. Only a success is
 kept, so an archive that failed to open over a dropped connection is tried again
 next time.
 
+An entry is inflated on its first read, once for it and every slice of it. An
+entry _stored_ without compression is not inflated at all: its bytes are a range
+of the archive, so a slice of it is read by range and a stream of it is
+streamed — which makes an archive stored inside another one about as cheap to
+read as one on its own.
+
 What comes back carries the full path — `file("/pack.zip#/inside.txt").path` is
 `/pack.zip#/inside.txt`, with each name as the archive stores it — so it can be
 logged, cached by, or opened again.

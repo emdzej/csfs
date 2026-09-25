@@ -86,6 +86,23 @@ beforeAll(async () => {
   await writeFile(join(dir, "top.txt"), "at the top");
   await writeFile(join(dir, "deep", "nested", "big.bin"), pattern(300_000));
   await writeFile(join(dir, "deep", "note.txt"), "nested note");
+  // Stored, not deflated, with an archive stored inside it: read by range
+  // straight through both.
+  {
+    const stored = async (files: { name: string; bytes: Uint8Array }[]) => {
+      const w = new ZipWriter(new BlobWriter("application/zip"), {
+        useWebWorkers: false,
+        level: 0,
+      });
+      for (const f of files) await w.add(f.name, new Uint8ArrayReader(f.bytes));
+      return new Uint8Array(await (await w.close()).arrayBuffer());
+    };
+    const inner = await stored([{ name: "deep.bin", bytes: pattern(100_000) }]);
+    await writeFile(
+      join(dir, "stored.zip"),
+      await stored([{ name: "inner.zip", bytes: inner }]),
+    );
+  }
   // Every character a URL would otherwise read as syntax, in one name.
   await writeFile(join(dir, "deep", "odd name #1 100%?.txt"), "oddly named");
   // A flat archive standing in for a nested tree, and one plain archive.
@@ -187,6 +204,22 @@ describe("HTTP and Node agree", () => {
         await local.slice(start, end).bytes(),
       );
     }
+  });
+
+  it("reads a stored archive inside a stored archive, by range, the same on both", async () => {
+    const path = "/stored.zip#/inner.zip#/deep.bin";
+    const local = (await withArchives(nodeFileSystem(dir)).file(path))!;
+    const remote = (await withArchives(httpFileSystem(base)).file(path))!;
+    for (const [a, b] of [
+      [0, 1],
+      [99_990, 100_000],
+      [40_000, 60_000],
+    ] as const) {
+      expect(await remote.slice(a, b).bytes()).toEqual(await local.slice(a, b).bytes());
+    }
+    expect(new Uint8Array(await new Response(remote.stream()).arrayBuffer())).toEqual(
+      await local.bytes(),
+    );
   });
 
   it("streams the same bytes it reads", async () => {

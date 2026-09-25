@@ -183,6 +183,13 @@ bump is where features land.
   checked as it passes, so a short body errors the stream rather than ending
   it cleanly, and cancelling the stream aborts the request. `RangeFile` takes
   a `{ read, stream }` source for any backend that can do the same.
+- **A stored zip entry is read by range.** An entry stored without
+  compression is a range of its archive, so slicing it now slices the archive:
+  over HTTP, reading 100 bytes of a stored 200 KB entry reads its local header
+  and those bytes, where it used to inflate — copy — all of it. It streams, and
+  an archive stored inside an archive is read through both by range. The CRC
+  is not checked on that path, since a partial read cannot check it; a local
+  header that is not where the central directory says falls back to zip.js.
 - A base URL's query string — a presigned or SAS token — is carried onto every
   request.
 - A manifest uploaded gzipped without `Content-Encoding` is recognised by its

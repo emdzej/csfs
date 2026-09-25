@@ -59,6 +59,40 @@ function keyOf(name: string, caseInsensitive: boolean): string {
   return caseInsensitive ? name.toLowerCase() : name;
 }
 
+/** Stored without compression or encryption, on the archive's only disk. */
+function isStored(entry: FileEntry): boolean {
+  return entry.compressionMethod === 0 && !entry.encrypted && !entry.diskNumberStart;
+}
+
+function oneChunk(bytes: Uint8Array): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      if (bytes.byteLength > 0) controller.enqueue(bytes);
+      controller.close();
+    },
+  });
+}
+
+/** A stream whose source is only known once something asks for a byte. */
+function lazyStream(
+  open: (signal: AbortSignal) => Promise<ReadableStream<Uint8Array>>,
+): ReadableStream<Uint8Array> {
+  const cancel = new AbortController();
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      reader ??= (await open(cancel.signal)).getReader();
+      const { done, value } = await reader.read();
+      if (done) controller.close();
+      else controller.enqueue(value);
+    },
+    async cancel(reason) {
+      cancel.abort(reason);
+      await reader?.cancel(reason);
+    },
+  });
+}
+
 export class ZipFileSystem implements CsFileSystem {
   readonly kind = "zip";
   private tree: Promise<Node> | undefined;
@@ -207,12 +241,60 @@ export class ZipFileSystem implements CsFileSystem {
     // cost the whole entry and left no way to cancel it. Shared, so the
     // inflation stops only when every reader waiting on it has aborted.
     const inflate = shared((signal) => this.readEntry(entry, signal));
+    const inflated = async (start: number, end: number, signal?: AbortSignal) =>
+      (await inflate(signal)).subarray(start, end);
+    if (!isStored(entry)) {
+      return new RangeFile(found.path, entry.uncompressedSize, inflated, mimeType(found.path));
+    }
+    // Stored, not compressed: the entry's bytes *are* a range of the archive,
+    // so a slice of it is a slice of that — read by range over HTTP, streamed,
+    // and never held whole. That is what makes an archive inside an archive
+    // cheap, since archives are usually stored rather than deflated twice.
+    // CRC is not checked on this path, as it cannot be for a partial read.
+    const locate = shared((signal) => this.dataOffset(entry, signal));
+    const archive = this.archive;
     return new RangeFile(
       found.path,
       entry.uncompressedSize,
-      async (start, end, signal) => (await inflate(signal)).subarray(start, end),
+      {
+        read: async (start, end, signal) => {
+          const at = await locate(signal);
+          if (at === null) return await inflated(start, end, signal);
+          return await archive.slice(at + start, at + end).bytes(signal ? { signal } : {});
+        },
+        stream: (start, end) =>
+          lazyStream(async (signal) => {
+            const at = await locate(signal);
+            if (at === null) return oneChunk(await inflated(start, end, signal));
+            return archive.slice(at + start, at + end).stream();
+          }),
+      },
       mimeType(found.path),
     );
+  }
+
+  /**
+   * Where a stored entry's bytes begin, from its local header.
+   *
+   * The central directory gives the header's offset; the header's own name and
+   * extra-field lengths — which may differ from the central directory's — give
+   * the rest. `null` when the header is not where it should be, and the entry
+   * is then read the ordinary way, through zip.js, which knows more about
+   * malformed archives than this does.
+   */
+  private async dataOffset(entry: FileEntry, signal: AbortSignal): Promise<number | null> {
+    const header = await this.archive.slice(entry.offset, entry.offset + 30).bytes({ signal });
+    if (header.byteLength < 30) return null;
+    const view = new DataView(header.buffer, header.byteOffset, header.byteLength);
+    if (view.getUint32(0, true) !== 0x04034b50) return null;
+    const at = entry.offset + 30 + view.getUint16(26, true) + view.getUint16(28, true);
+    if (at + entry.uncompressedSize > this.archive.size) {
+      throw new BackendError(
+        `entry runs past the end of the archive`,
+        `${this.archive.path}#/${entry.filename}`,
+      );
+    }
+    return at;
   }
 
   async directory(path: string): Promise<CsDirectory | null> {

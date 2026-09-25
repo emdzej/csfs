@@ -392,6 +392,79 @@ describe("reading an entry", () => {
   });
 });
 
+describe("a stored entry", () => {
+  /** An archive whose entries are stored, not deflated. */
+  async function storedZip(files: { name: string; bytes: Uint8Array }[]) {
+    const writer = new ZipWriter(new BlobWriter("application/zip"), {
+      useWebWorkers: false,
+      level: 0,
+    });
+    for (const f of files) await writer.add(f.name, new Uint8ArrayReader(f.bytes));
+    return new Uint8Array(await (await writer.close()).arrayBuffer());
+  }
+
+  /** An archive file that counts the bytes read from it. */
+  function counted(path: string, bytes: Uint8Array) {
+    const counter = { read: 0 };
+    const file = new RangeFile(path, bytes.byteLength, async (s, e) => {
+      counter.read += e - s;
+      return bytes.slice(s, e);
+    });
+    return { file, counter };
+  }
+
+  const big = new Uint8Array(200_000).map((_, i) => (i * 13) % 251);
+
+  it("reads a slice by range from the archive, not the whole entry", async () => {
+    const { file, counter } = counted(
+      "/s.zip",
+      await storedZip([{ name: "big.bin", bytes: big }]),
+    );
+    const entry = (await zipFileSystem(file).file("/big.bin"))!;
+    const before = counter.read;
+    expect(await entry.slice(150_000, 150_100).bytes()).toEqual(big.subarray(150_000, 150_100));
+    // The local header, then the hundred bytes asked for.
+    expect(counter.read - before).toBeLessThan(200);
+    expect(await entry.bytes()).toEqual(big);
+    expect(new Uint8Array(await new Response(entry.stream()).arrayBuffer())).toEqual(big);
+  });
+
+  it("reads an archive stored inside an archive without holding the outer entry", async () => {
+    const inner = await storedZip([{ name: "deep.bin", bytes: big }]);
+    const { file, counter } = counted(
+      "/outer.zip",
+      await storedZip([{ name: "inner.zip", bytes: inner }]),
+    );
+    const fs = withArchives({
+      kind: "one",
+      file: async (p) => (p === "/outer.zip" ? file : null),
+      directory: async () => null,
+      read: async () => null,
+      stat: async () => null,
+    });
+    const deep = (await fs.file("/outer.zip#/inner.zip#/deep.bin"))!;
+    // Opening costs zip.js's search for each archive's end record — up to
+    // 64 KB apiece — and nothing like the 200 KB inside.
+    expect(counter.read).toBeLessThan(big.byteLength);
+    const opened = counter.read;
+    expect(await deep.slice(10, 20).bytes()).toEqual(big.subarray(10, 20));
+    // Then a read is its header and its bytes, straight through both archives.
+    expect(counter.read - opened).toBeLessThan(200);
+  });
+
+  it("never reads the wrong bytes when the local header is not where it should be", async () => {
+    const zip = await storedZip([{ name: "x.bin", bytes: big.subarray(0, 64) }]);
+    const { file } = counted("/a.zip", zip);
+    const entry = (await zipFileSystem(file).file("/x.bin"))!;
+    // The local header's signature, broken after the central directory is read.
+    zip[0] = 0;
+    // Handed to zip.js, which may refuse it — but never answered from an
+    // offset computed out of a header that is not one.
+    const got = await entry.bytes().catch(() => null);
+    if (got !== null) expect(got).toEqual(big.subarray(0, 64));
+  });
+});
+
 describe("archives that fail to open", () => {
   const flaky = (bytes: Uint8Array, failures: { left: number; error: () => Error }) => {
     const fs: CsFileSystem = {
