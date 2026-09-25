@@ -122,6 +122,11 @@ bump is where features land.
 
 ### Tooling
 
+- **`fsa` and `opfs` are in the parity suite.** Only `node` and `http` were
+  compared; the handle-backed backends had tests of their name resolution and
+  nothing that checked what they read against anything. They now copy a real
+  tree through their own `write` into the in-memory fake and match `node` on
+  the walk, ranges at six offsets, reads inside an archive, and `stat`.
 - The demo deploys after CI passes, not beside it.
 - vitest resolves the packages to their sources, so `pnpm test` without a
   build no longer tests the last build of everything else.

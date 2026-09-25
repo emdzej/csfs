@@ -50,6 +50,9 @@
     "@emdzej/csfs-core": "workspace:*"
   },
   "devDependencies": {
-    "@types/node": "^22.13.1"
+    "@emdzej/csfs-node": "workspace:*",
+    "@emdzej/csfs-zip": "workspace:*",
+    "@types/node": "^22.13.1",
+    "@zip.js/zip.js": "^2.10.0"
   }
 }
