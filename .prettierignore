@@ -9,3 +9,7 @@ dist/
 
 # Trees built for testing.
 data/
+
+# Playwright output.
+test-results/
+playwright-report/

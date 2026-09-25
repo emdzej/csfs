@@ -19,7 +19,8 @@
     "typecheck": "turbo run typecheck && tsc -p tsconfig.test.json",
     "check": "turbo run build typecheck && tsc -p tsconfig.test.json && vitest run && prettier --check .",
     "format": "prettier --write .",
-    "clean": "turbo run clean"
+    "clean": "turbo run clean",
+    "e2e": "turbo run build && pnpm --filter @emdzej/csfs-e2e test"
   },
   "devDependencies": {
     "@types/node": "^22.20.4",

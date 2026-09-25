@@ -59,3 +59,37 @@ jobs:
 
       - name: Formatting
         run: pnpm prettier --check .
+
+  browsers:
+    name: Browsers (Playwright)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Install the browsers
+        # With their system dependencies: WebKit and Firefox need libraries a
+        # bare runner does not have.
+        run: pnpm --filter @emdzej/csfs-e2e exec playwright install --with-deps chromium firefox webkit
+
+      - name: Build
+        run: pnpm build
+
+      - name: Test in Chromium, Firefox and WebKit
+        # What Node forgives and a tab does not: `fetch` with the wrong `this`,
+        # CORS headers a page cannot read, OPFS as each engine really has it —
+        # WebKit's folds case, which is how this suite first earned its keep.
+        run: pnpm --filter @emdzej/csfs-e2e test
+
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: playwright-report
+          path: e2e/test-results/
+          retention-days: 7

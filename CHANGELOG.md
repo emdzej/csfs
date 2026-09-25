@@ -136,6 +136,24 @@ bump is where features land.
 - `csfs-cli` is published, as the release workflow already did; `AGENTS.md`
   said it was private.
 
+### Found in real browsers
+
+An `e2e/` suite now runs the libraries in Chromium, Firefox and WebKit with
+Playwright. On its first run it found three things Node could not:
+
+- **WebKit's OPFS folds case**, following the disk on macOS, and a handle
+  opened by an alias names itself as asked while `isSameEntry` denies it is
+  the stored entry. `fsa`'s check for an exact spelling took the alias at its
+  word, so a case-insensitive lookup answered `/epc/DATA1/pref.bin` for
+  `/EPC/DATA1/PREF.BIN`. It now checks against a listing and learns that the
+  host folds, after which it never asks again.
+- **Firefox's `navigator.storage.persist()` waits on a prompt** and never
+  settles when nobody answers, so `persist()` hung. It takes `{ signal }`, and
+  an abort counts as no.
+- **`queryAccess` answered `false` for an OPFS handle on Firefox and WebKit**,
+  which have no handle permission API at all; `requestAccess` could not change
+  it. No API now means access.
+
 ### Tooling
 
 - **`fsa` and `opfs` are in the parity suite.** Only `node` and `http` were

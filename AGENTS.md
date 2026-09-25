@@ -21,10 +21,17 @@ sees no bytes arrive and reads it as slowness. It was found by watching
 `navigator.storage.estimate()` stay flat.
 
 `packages/fsa` now has tests, over an in-memory `FileSystemDirectoryHandle` in
-`fake-directory.ts`. Keep that fake literal: **case-sensitive names**, and
-`getDirectoryHandle` without `create` must _reject_ with `NotFoundError` rather
-than return null. A fake that smooths either one over hides exactly the bugs
-this layer has.
+`fake-directory.ts`. Keep that fake literal: **case-sensitive names** by
+default, and `getDirectoryHandle` without `create` must _reject_ with
+`NotFoundError` (a wrong kind, with `TypeMismatchError`) rather than return
+null. A fake that smooths either one over hides exactly the bugs this layer has.
+
+And check it against the engines, which is what `e2e/` does: the fake said OPFS
+was case-sensitive everywhere, and **WebKit's folds** on macOS — worse, a handle
+opened by an alias calls itself by the alias and `isSameEntry` denies it is the
+stored entry, so nothing on a handle distinguishes an alias from a second entry.
+Only a listing does. `fakeDirectory({ folds: true })` now behaves the same way;
+it passed a resolver WebKit broke until it did.
 
 ## Before you finish
 
@@ -195,6 +202,10 @@ code. Keep it that way.
   `queryPermission` to say `"prompt"`, and remember `requestPermission` only
   works inside a user gesture. Say so in an interface rather than letting it be
   discovered.
+- **`navigator.storage.persist()` may never settle.** Firefox asks the user and
+  waits. `persist({ signal })` exists for that; do not await it bare.
+- **No permission API is not "no permission".** Firefox and WebKit have no
+  `queryPermission` on handles; an OPFS handle there is simply usable.
 - **OPFS is shared across the origin.** A file system rooted at `/` can see and
   delete another consumer's files. Use `namespace`.
 - **`createWritable` doubles write traffic.** It stages to a temp file and swaps
@@ -228,9 +239,9 @@ code. Keep it that way.
   `@emdzej/csfs-cache`, as a decorator over any backend.
 - **No writer for archives.** Reading is done; building one is not, so a tree
   cannot be _packed_ by csfs.
-- **The browser backends have no browser tests.** `fsa` and `opfs` run over
-  the in-memory fake, but nothing drives a real directory picker — that needs
-  interaction a headless run cannot supply.
+- **Nothing drives a real directory picker.** `e2e/` runs every backend in
+  three engines, and `fsa` over real OPFS handles, but `showDirectoryPicker`
+  needs a person.
 - **`bimmerz-core` still has its own `vfs`.** The intent is for it to depend on
   csfs instead; nothing here should depend on it. 0.2.0 closed what was
   blocking that migration — case-insensitive HTTP lookups, names answered as

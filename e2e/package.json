@@ -1,0 +1,26 @@
+{
+  "name": "@emdzej/csfs-e2e",
+  "version": "0.2.0",
+  "private": true,
+  "description": "csfs in real browsers: Chromium, Firefox and WebKit, driven by Playwright",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@emdzej/csfs-core": "workspace:*",
+    "@emdzej/csfs-fsa": "workspace:*",
+    "@emdzej/csfs-http": "workspace:*",
+    "@emdzej/csfs-manifest": "workspace:*",
+    "@emdzej/csfs-node": "workspace:*",
+    "@emdzej/csfs-opfs": "workspace:*",
+    "@emdzej/csfs-zip": "workspace:*",
+    "@playwright/test": "^1.63.0",
+    "@types/node": "^22.20.4",
+    "@zip.js/zip.js": "^2.18.2",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.1"
+  }
+}

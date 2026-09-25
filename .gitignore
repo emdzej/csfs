@@ -5,3 +5,6 @@ dist/
 .DS_Store
 # Trees built for testing: not ours to commit, and large.
 data/
+# Playwright's output.
+test-results/
+playwright-report/
