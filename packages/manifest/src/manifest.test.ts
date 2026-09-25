@@ -10,7 +10,13 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { nodeFileSystem } from "@emdzej/csfs-node";
-import { buildManifest, formatManifest, ManifestIndex, type Manifest } from "./index.js";
+import {
+  buildManifest,
+  formatManifest,
+  ManifestIndex,
+  parseManifest,
+  type Manifest,
+} from "./index.js";
 
 let dir: string;
 
@@ -128,5 +134,51 @@ describe("ManifestIndex, case-insensitively", () => {
     const index = new ManifestIndex(m, { caseInsensitive: true });
     expect(index.hasDirectory("/drawings")).toBe(true);
     expect(index.canonical("/drawings")).toBe("/Drawings");
+  });
+});
+
+describe("parseManifest", () => {
+  it("normalises paths, so a key a listing shows is a key a lookup finds", () => {
+    const m = parseManifest({
+      csfs: 1,
+      files: { "a/b.txt": 5 },
+      archives: [{ archive: "x.zip", serves: "mounted/" }],
+    });
+    expect(m.files).toEqual({ "/a/b.txt": 5 });
+    expect(m.archives).toEqual([{ archive: "/x.zip", serves: "/mounted" }]);
+    expect(new ManifestIndex(m).hasFile("/a/b.txt")).toBe(true);
+  });
+
+  it.each([
+    ["an array of files", { csfs: 1, files: [] }, /no files map/],
+    ["a size that is not a number", { csfs: 1, files: { "/a": "5" } }, /size of "5"/],
+    ["a negative size", { csfs: 1, files: { "/a": -1 } }, /size of -1/],
+    ["a path listed twice once normalised", { csfs: 1, files: { "/a": 1, a: 2 } }, /twice/],
+    [
+      "an archive that serves nothing",
+      { csfs: 1, files: {}, archives: [{ archive: "/x.zip" }] },
+      /archive 0/,
+    ],
+    [
+      "an archive with an unknown entry mode",
+      { csfs: 1, files: {}, archives: [{ archive: "/x.zip", serves: "/", entry: "flat" }] },
+      /entry "flat"/,
+    ],
+    ["another version", { csfs: 2, files: {} }, /version 2/],
+  ])("refuses %s", (_, value, message) => {
+    expect(() => parseManifest(value)).toThrow(message);
+  });
+});
+
+describe("ManifestIndex", () => {
+  it("has a root even when the tree is empty", () => {
+    const index = new ManifestIndex({ csfs: 1, files: {} });
+    expect(index.hasDirectory("/")).toBe(true);
+    expect(index.canonical("/")).toBe("/");
+  });
+
+  it("reports no collisions when it is not folding", () => {
+    const files = { "/x/a.bin": 1, "/x/A.BIN": 2 };
+    expect(new ManifestIndex({ csfs: 1, files }).caseCollisions).toEqual([]);
   });
 });

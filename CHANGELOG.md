@@ -7,6 +7,49 @@ combination is coherent.
 Versions follow [semantic versioning](https://semver.org/). Before 1.0 a minor
 bump is where features land.
 
+## Unreleased
+
+### Fixed
+
+- **`csfs-http` checked the answer it got against the question it asked.** A
+  `206` was taken on trust, so a stale manifest — the host clamping the range
+  to the shorter file it had — came back as a short read with no error. A 206
+  for another range, a 206 of the wrong length, and a whole body that is not
+  the manifest's size are now `BackendError`s naming the stale manifest.
+- **An injected `fetch` was still called as a method.** Only the default was
+  wrapped, so `{ fetch: window.fetch }` threw "Illegal invocation" in a tab —
+  the bug 0.1.0 fixed, reintroduced for anyone who passed their own.
+- **Paths were not encoded.** `/a#b.txt` fetched `/a`, `/q?x=1.bin` fetched
+  `/q`, and `directUrl` handed out the same wrong URLs. Each segment is now
+  `encodeURIComponent`ed, and the parity fixture has a file named for it.
+- **The HTML check ran before the status check**, so a 404 page — which is what
+  nginx, S3 and GitHub Pages send — was reported as `NotDataError` ("is this
+  really a data tree?") instead of a missing file, and a listed `.html` file
+  could never be read.
+- **A failed manifest fetch was cached for good.** One 503 while opening broke
+  the instance for its lifetime.
+- **`parseManifest` checked less than it said.** Keys are now normalised — a
+  key written `a/b.txt` appeared in its listing but missed on lookup — sizes
+  must be non-negative integers, and `archives` is validated.
+- `caseCollisions` is empty on a case-sensitive index, as documented; an empty
+  manifest has a root.
+
+### Changed
+
+- **Without `Range`, `csfs-http` keeps several bodies, and shares downloads.**
+  `wholeFileCacheBytes` is now a budget over the most recently used bodies
+  rather than one slot, because several archives serving one directory evicted
+  each other on every lookup. Concurrent reads before `"auto"` has latched wait
+  for the first probe instead of each downloading the whole file, and two
+  slices of one uncached file share one download. Unread bodies are cancelled.
+
+### Added
+
+- A base URL's query string — a presigned or SAS token — is carried onto every
+  request.
+- A manifest uploaded gzipped without `Content-Encoding` is recognised by its
+  magic number and decompressed.
+
 ## 0.2.0
 
 Everything here came out of evaluating csfs as a replacement for

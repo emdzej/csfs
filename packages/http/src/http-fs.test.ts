@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { NotDataError, RangeUnsupportedError } from "@emdzej/csfs-core";
+import { BackendError, NotDataError, RangeUnsupportedError } from "@emdzej/csfs-core";
 import type { Manifest } from "@emdzej/csfs-manifest";
 import { httpFileSystem } from "./index.js";
 
@@ -303,5 +303,195 @@ describe("HttpFileSystem, case-insensitively", () => {
     // An exact match still beats the fold, so the shadowed file is not lost to
     // a caller that spells it exactly.
     expect((await fs.file("/ecu/ms43.prg"))!.path).toBe("/ecu/ms43.prg");
+  });
+});
+
+describe("HttpFileSystem, against a host that misbehaves", () => {
+  /** A fetch answering every data request with one fixed response. */
+  function answering(respond: (url: string, range?: string) => Response, manifest = MANIFEST) {
+    const calls: { url: string; range?: string }[] = [];
+    const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const range = (init?.headers as Record<string, string> | undefined)?.Range;
+      calls.push({ url, ...(range !== undefined ? { range } : {}) });
+      if (url.includes("/csfs-manifest.json")) {
+        return new Response(JSON.stringify(manifest), {
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return respond(url, range);
+    }) as typeof globalThis.fetch;
+    return { impl, calls };
+  }
+
+  it("calls an injected fetch as a function, not as a method", async () => {
+    // What a browser's `fetch` does when handed the wrong `this`.
+    const seen: unknown[] = [];
+    const strict = function (this: unknown, input: RequestInfo | URL) {
+      seen.push(this);
+      return Promise.resolve(
+        new Response(JSON.stringify(MANIFEST), {
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    } as typeof globalThis.fetch;
+    const fs = httpFileSystem("http://host/data", { fetch: strict });
+    await fs.describe();
+    expect(seen).toEqual([undefined]);
+  });
+
+  it("encodes each segment, so # ? and % reach the host as names", async () => {
+    const odd: Manifest = {
+      csfs: 1,
+      files: { "/a#b.txt": 1, "/q?x=1.bin": 1, "/100%.txt": 1 },
+    };
+    const { impl, calls } = answering(
+      () => new Response(new Uint8Array([7]), { status: 206, headers: {} }),
+      odd,
+    );
+    const fs = httpFileSystem("http://host/data", { fetch: impl });
+    for (const path of Object.keys(odd.files)) await fs.read(path);
+    expect(calls.slice(1).map((c) => new URL(c.url).pathname)).toEqual([
+      "/data/a%23b.txt",
+      "/data/q%3Fx%3D1.bin",
+      "/data/100%25.txt",
+    ]);
+    expect(await fs.directUrl("/a#b.txt")).toBe("http://host/data/a%23b.txt");
+  });
+
+  it("carries a base URL's query onto every request", async () => {
+    const { impl, calls } = answering(() => new Response(pattern(5), { status: 200 }));
+    const fs = httpFileSystem("http://host/data/?sig=abc", { fetch: impl });
+    await fs.read("/a.txt");
+    expect(calls.map((c) => c.url)).toEqual([
+      "http://host/data/csfs-manifest.json?sig=abc",
+      "http://host/data/a.txt?sig=abc",
+    ]);
+  });
+
+  it("refuses a 206 for a range other than the one asked for", async () => {
+    // A host clamps to the file it has: the manifest says 256, the host has 100.
+    const { impl } = answering(
+      () =>
+        new Response(pattern(100).subarray(50), {
+          status: 206,
+          headers: { "content-range": "bytes 50-99/100" },
+        }),
+    );
+    const fs = httpFileSystem("http://host/data", { fetch: impl });
+    const file = (await fs.file("/deep/nested/b.bin"))!;
+    await expect(file.slice(50, 150).bytes()).rejects.toThrow(/disagree/);
+  });
+
+  it("refuses a 206 shorter than asked for, even without Content-Range", async () => {
+    const { impl } = answering(() => new Response(pattern(10), { status: 206 }));
+    const fs = httpFileSystem("http://host/data", { fetch: impl });
+    await expect((await fs.file("/deep/nested/b.bin"))!.slice(0, 64).bytes()).rejects.toThrow(
+      /asked for 64 bytes, got 10/,
+    );
+  });
+
+  it("refuses a whole body of the wrong length rather than slicing it", async () => {
+    const { impl } = answering(() => new Response(pattern(3), { status: 200 }));
+    const fs = httpFileSystem("http://host/data", { fetch: impl });
+    await expect(fs.read("/a.txt")).rejects.toThrow(/manifest is stale/);
+  });
+
+  it("reports an HTML 404 as a failed read, not as a tree that is elsewhere", async () => {
+    const { impl } = answering(
+      () =>
+        new Response("<!doctype html><h1>Not Found</h1>", {
+          status: 404,
+          headers: { "content-type": "text/html" },
+        }),
+    );
+    const fs = httpFileSystem("http://host/data", { fetch: impl });
+    const err = await fs.read("/a.txt").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(BackendError);
+    expect(err).not.toBeInstanceOf(NotDataError);
+    expect(String(err)).toMatch(/HTTP 404/);
+  });
+
+  it("names a 416 as a stale manifest", async () => {
+    const { impl } = answering(() => new Response(null, { status: 416 }));
+    const fs = httpFileSystem("http://host/data", { fetch: impl });
+    await expect(fs.read("/a.txt")).rejects.toThrow(/not satisfiable/);
+  });
+
+  it("reads an HTML file the manifest lists", async () => {
+    const page = new TextEncoder().encode("<p>hi</p>");
+    const { impl } = answering(
+      () =>
+        new Response(page, {
+          status: 206,
+          headers: { "content-type": "text/html", "content-range": "bytes 0-8/9" },
+        }),
+      { csfs: 1, files: { "/docs/index.html": 9 } },
+    );
+    const fs = httpFileSystem("http://host/data", { fetch: impl });
+    expect(await (await fs.file("/docs/index.html"))!.text()).toBe("<p>hi</p>");
+  });
+
+  it("tries the manifest again after a failure", async () => {
+    let attempts = 0;
+    const impl = (async () => {
+      attempts += 1;
+      if (attempts === 1) return new Response("busy", { status: 503 });
+      return new Response(JSON.stringify(MANIFEST), {
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof globalThis.fetch;
+    const fs = httpFileSystem("http://host/data", { fetch: impl });
+    await expect(fs.describe()).rejects.toBeInstanceOf(NotDataError);
+    expect((await fs.describe()).files["/a.txt"]).toBe(5);
+  });
+
+  it("reads a manifest that was uploaded gzipped", async () => {
+    const gz = new Uint8Array(
+      await new Response(
+        new Blob([JSON.stringify(MANIFEST)])
+          .stream()
+          .pipeThrough(new CompressionStream("gzip")),
+      ).arrayBuffer(),
+    );
+    const impl = (async () =>
+      new Response(gz, {
+        headers: { "content-type": "application/octet-stream" },
+      })) as typeof globalThis.fetch;
+    const fs = httpFileSystem("http://host/data", { fetch: impl });
+    expect((await fs.describe()).files["/a.txt"]).toBe(5);
+  });
+
+  it("asks once while finding out whether the host honours Range", async () => {
+    const body = pattern(256);
+    const { impl, calls } = answering(() => new Response(body, { status: 200 }));
+    const fs = httpFileSystem("http://host/data", { fetch: impl });
+    const file = (await fs.file("/deep/nested/b.bin"))!;
+    const reads = await Promise.all(
+      [0, 64, 128, 192].map((at) => file.slice(at, at + 8).bytes()),
+    );
+    expect(reads[2]).toEqual(body.subarray(128, 136));
+    // One probe, and the three that waited for it were served from its body.
+    expect(calls.length - 1).toBe(1);
+  });
+
+  it("downloads a whole file once for concurrent slices of it", async () => {
+    const body = pattern(256);
+    const { impl, calls } = answering(() => new Response(body, { status: 200 }));
+    const fs = httpFileSystem("http://host/data", { fetch: impl, ranges: "never" });
+    const file = (await fs.file("/deep/nested/b.bin"))!;
+    await Promise.all([file.slice(0, 4).bytes(), file.slice(8, 12).bytes()]);
+    expect(calls.length - 1).toBe(1);
+  });
+
+  it("keeps more than one whole body, so alternating archives are not refetched", async () => {
+    const two: Manifest = { csfs: 1, files: { "/1.zip": 64, "/2.zip": 64 } };
+    const { impl, calls } = answering(() => new Response(pattern(64), { status: 200 }), two);
+    const fs = httpFileSystem("http://host/data", { fetch: impl, ranges: "never" });
+    for (let i = 0; i < 3; i++) {
+      await fs.read("/1.zip");
+      await fs.read("/2.zip");
+    }
+    expect(calls.length - 1).toBe(2);
   });
 });

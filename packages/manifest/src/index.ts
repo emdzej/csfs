@@ -63,7 +63,13 @@ export interface Manifest {
 }
 
 export interface BuildManifestOptions {
-  /** Where to start. Default: the root. */
+  /**
+   * Where to start. Default: the root.
+   *
+   * Paths are still recorded from the file system's root, so `root: "/sub"`
+   * gives `/sub/...` keys and the manifest belongs at the *root's* base URL.
+   * To serve `sub` as a tree of its own, open the file system at `sub`.
+   */
   root?: string;
   /** Skip a file. */
   filter?: (path: string, size: number) => boolean;
@@ -125,9 +131,20 @@ export async function buildManifest(
   };
 }
 
-/** Validate an unknown value as a manifest, or explain why it is not one. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Validate an unknown value as a manifest, or explain why it is not one.
+ *
+ * Every path comes back normalised. A key written as `a/b.txt` was otherwise
+ * accepted as it stood: its directory listed it, because directories are
+ * derived through `dirname`, but a lookup for `/a/b.txt` missed it — a file
+ * visible in its listing that could not be opened.
+ */
 export function parseManifest(value: unknown): Manifest {
-  if (typeof value !== "object" || value === null) {
+  if (!isRecord(value)) {
     throw new Error("manifest is not an object");
   }
   const m = value as Partial<Manifest>;
@@ -137,10 +154,39 @@ export function parseManifest(value: unknown): Manifest {
     // of one that fails.
     throw new Error(`manifest version ${String(m.csfs)} is not supported (expected 1)`);
   }
-  if (typeof m.files !== "object" || m.files === null) {
+  if (!isRecord(m.files)) {
     throw new Error("manifest has no files map");
   }
-  return m as Manifest;
+  const files: Record<string, number> = {};
+  for (const [key, size] of Object.entries(m.files)) {
+    if (typeof size !== "number" || !Number.isSafeInteger(size) || size < 0) {
+      throw new Error(`manifest gives ${key} a size of ${JSON.stringify(size)}`);
+    }
+    const path = normalizePath(key);
+    if (path === "/") throw new Error(`manifest lists the root as a file (${key})`);
+    if (path in files) throw new Error(`manifest lists ${path} twice`);
+    files[path] = size;
+  }
+  let archives: ManifestArchive[] | undefined;
+  if (m.archives !== undefined) {
+    if (!Array.isArray(m.archives)) throw new Error("manifest archives is not a list");
+    archives = m.archives.map((a: unknown, i) => {
+      if (!isRecord(a) || typeof a.archive !== "string" || typeof a.serves !== "string") {
+        throw new Error(`manifest archive ${i} needs an archive and a serves path`);
+      }
+      if (a.entry !== undefined && a.entry !== "relative" && a.entry !== "basename") {
+        throw new Error(`manifest archive ${i} has entry ${JSON.stringify(a.entry)}`);
+      }
+      return {
+        archive: normalizePath(a.archive),
+        serves: normalizePath(a.serves),
+        ...(a.entry !== undefined ? { entry: a.entry } : {}),
+      };
+    });
+  }
+  const out: Manifest = { ...(m as Manifest), files };
+  if (archives) out.archives = archives;
+  return out;
 }
 
 /** Serialise, with the file map sorted so the output is reproducible. */
@@ -192,6 +238,10 @@ export class ManifestIndex {
   ) {
     this.insensitive = opts.caseInsensitive ?? false;
     this.files = new Map(Object.entries(manifest.files));
+    // The root exists even in a tree with nothing in it, as it does on every
+    // other backend; an empty manifest otherwise answered `directory("/")`
+    // with null.
+    this.children.set("/", new Map());
     for (const path of this.files.keys()) {
       let child = path;
       let parent = dirname(path);
@@ -242,8 +292,12 @@ export class ManifestIndex {
    * since nothing is then ambiguous. Worth surfacing at build time: under
    * `caseInsensitive` only the first of each group is reachable, and a tree
    * that quietly hides a file is worse than one that refuses to.
+   *
+   * To ask whether a tree *would* collide if folded, index it with
+   * `caseInsensitive: true`.
    */
   get caseCollisions(): string[][] {
+    if (!this.insensitive) return [];
     const groups = new Map<string, string[]>();
     for (const path of [...this.files.keys(), ...this.children.keys()]) {
       const key = path.toLowerCase();

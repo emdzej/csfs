@@ -17,7 +17,10 @@
  *   be documents. An HTML content type where data was expected is its own error
  *   type, distinct from a 404, because the two need opposite handling.
  * - **A host that disagrees with the manifest** about a file's length answers
- *   416. That is a stale manifest, not a missing range, and it says so.
+ *   416, or a 206 shorter than asked for, or a 200 of the wrong length. That is
+ *   a stale manifest, not a missing range, and it says so — a short read handed
+ *   back as though it were the slice is exactly the silent wrong answer the
+ *   other two are refused for.
  */
 import {
   BackendError,
@@ -83,14 +86,17 @@ export interface HttpFileSystemOptions {
   /** How to read part of a file. Default `"auto"`. */
   ranges?: RangeMode;
   /**
-   * Largest whole-file body kept in memory when reading without ranges.
-   * Default 16 MiB; `0` disables it.
+   * Memory for whole-file bodies when reading without ranges. Default 16 MiB;
+   * `0` disables it.
    *
-   * One body, the most recent. That is not a general cache and is not meant to
-   * be one — it exists because a single logical read is several slices of the
+   * The most recently used bodies that fit, and a body larger than the whole
+   * budget is never kept. That is not a general cache and is not meant to be
+   * one — it exists because a single logical read is several slices of the
    * *same* file: an archive is opened by reading its end, then its central
    * directory, then an entry. Without it, a no-`Range` host would serve the
-   * whole archive three times over for one file.
+   * whole archive three times over for one file. More than one body, because
+   * several archives can serve one directory and a lookup tries each in turn;
+   * a single slot evicted one archive to read the next, every time.
    */
   wholeFileCacheBytes?: number;
 }
@@ -100,6 +106,52 @@ function looksLikeHtml(type: string): boolean {
   return /\b(text\/html|application\/xhtml)\b/.test(type);
 }
 
+/**
+ * Is a web page here a sign the tree is somewhere else?
+ *
+ * Not when the file *is* a web page: a tree may well contain `index.html`, and
+ * refusing to read a file the manifest lists because it is what it says it is
+ * made it unreadable.
+ */
+function unexpectedHtml(res: Response, path: string): boolean {
+  return looksLikeHtml(res.headers.get("content-type") ?? "") && !looksLikeHtml(mimeType(path));
+}
+
+/**
+ * Let go of a body that will not be read.
+ *
+ * An unread body keeps its connection — on undici until garbage collection —
+ * and a refused 200 keeps downloading the whole file in the background.
+ */
+function discard(res: Response): void {
+  res.body?.cancel().catch(() => {});
+}
+
+/** `bytes a-b/total` → `[a, b]`, or `null` if absent or unreadable. */
+function contentRange(res: Response): [number, number] | null {
+  const m = /^bytes (\d+)-(\d+)\//.exec(res.headers.get("content-range") ?? "");
+  return m ? [Number(m[1]), Number(m[2])] : null;
+}
+
+/** A manifest, uploaded gzipped or not. */
+async function manifestJson(res: Response, url: string): Promise<unknown> {
+  let bytes = new Uint8Array(await res.arrayBuffer());
+  // Pre-gzipped and uploaded without `Content-Encoding` — which is how a
+  // bucket serves a `.json` someone compressed to save the 9:1 — reaches here
+  // still compressed. The magic number says so; nothing else will.
+  if (bytes[0] === 0x1f && bytes[1] === 0x8b) {
+    const stream = new Blob([bytes as unknown as ArrayBufferView<ArrayBuffer>])
+      .stream()
+      .pipeThrough(new DecompressionStream("gzip"));
+    bytes = new Uint8Array(await new Response(stream).arrayBuffer());
+  }
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch (e) {
+    throw new BackendError(`manifest is not JSON (${(e as Error).message})`, url);
+  }
+}
+
 const DEFAULT_WHOLE_FILE_CACHE = 16 * 1024 * 1024;
 
 export class HttpFileSystem implements CsFileSystem {
@@ -107,28 +159,42 @@ export class HttpFileSystem implements CsFileSystem {
   /** How this file system was told to read ranges. */
   readonly rangeMode: RangeMode;
   private readonly base: string;
+  /** A base URL's query — a presigned or SAS token — carried onto every request. */
+  private readonly query: string;
   private readonly fetchImpl: typeof globalThis.fetch;
   private readonly manifestFile: string;
   private readonly caseInsensitive: boolean;
   private readonly wholeFileCacheBytes: number;
-  private index?: Promise<ManifestIndex>;
+  private index: Promise<ManifestIndex> | undefined;
   /** `undefined` until a response has said one way or the other. */
   private ranges?: boolean;
   /**
-   * The most recent whole body, when reading without ranges.
+   * The first `Range` request under `"auto"`, while it is in flight.
    *
-   * Declared `| undefined` rather than optional because `exactOptionalPropertyTypes`
-   * distinguishes the two, and this one is genuinely cleared again.
+   * Concurrent reads wait for it rather than each sending their own: on a host
+   * that ignores the header, every one of them would otherwise download and
+   * buffer the whole file before the first answer latched.
    */
-  private whole: { path: string; bytes: Uint8Array } | undefined;
+  private probe: Promise<void> | undefined;
+  /** Whole bodies, least recently used first. */
+  private readonly whole = new Map<string, Uint8Array>();
+  private wholeBytes = 0;
+  /** Whole-body downloads in flight, so two slices of one file share one. */
+  private readonly pending = new Map<string, Promise<Uint8Array>>();
 
   constructor(baseUrl: string, opts: HttpFileSystemOptions = {}) {
-    this.base = baseUrl.replace(/\/+$/, "");
+    const [head, ...rest] = baseUrl.split("#")[0]!.split("?");
+    this.base = head!.replace(/\/+$/, "");
+    this.query = rest.length > 0 ? `?${rest.join("?")}` : "";
     // Bound, not just stored. `= fetch` makes `this.fetchImpl(...)` a *method*
     // call, so the browser's `fetch` receives this object as its `this` and
     // throws "Illegal invocation". Node tolerates it, so the mistake passes
-    // every server-side test and fails only in a tab.
-    this.fetchImpl = opts.fetch ?? ((input, init) => globalThis.fetch(input, init));
+    // every server-side test and fails only in a tab. That goes for an injected
+    // one too — `{ fetch: window.fetch }` is the obvious thing to pass.
+    const injected = opts.fetch;
+    this.fetchImpl = injected
+      ? (input, init) => injected(input, init)
+      : (input, init) => globalThis.fetch(input, init);
     this.manifestFile = opts.manifestFile ?? MANIFEST_FILE;
     this.caseInsensitive = opts.caseInsensitive ?? false;
     this.rangeMode = opts.ranges ?? "auto";
@@ -153,24 +219,42 @@ export class HttpFileSystem implements CsFileSystem {
     return this.ranges;
   }
 
+  /**
+   * Each segment encoded. Left to the URL parser, `#` starts a fragment and `?`
+   * a query, so `/a#b.txt` fetched `/a` — a different file, or none — and
+   * `directUrl` handed an `<img>` the same wrong address.
+   */
   private url(path: string): string {
-    return `${this.base}${normalizePath(path)}`;
+    const encoded = segments(normalizePath(path)).map(encodeURIComponent).join("/");
+    return `${this.base}/${encoded}${this.query}`;
   }
 
-  /** Fetch and index the manifest, once. */
+  /**
+   * Fetch and index the manifest, once it has succeeded.
+   *
+   * A failure is not kept: one dropped connection or a 503 while opening would
+   * otherwise leave the instance broken for as long as it lived.
+   */
   private manifest(): Promise<ManifestIndex> {
     this.index ??= (async () => {
-      const url = `${this.base}/${this.manifestFile}`;
+      const url = `${this.base}/${this.manifestFile}${this.query}`;
       const res = await this.fetchImpl(url);
       if (!res.ok) {
+        discard(res);
         throw new NotDataError(url, `HTTP ${res.status}`);
       }
       const type = res.headers.get("content-type") ?? "";
-      if (looksLikeHtml(type)) throw new NotDataError(url, type);
-      return new ManifestIndex(parseManifest(await res.json()), {
+      if (looksLikeHtml(type)) {
+        discard(res);
+        throw new NotDataError(url, type);
+      }
+      return new ManifestIndex(parseManifest(await manifestJson(res, url)), {
         caseInsensitive: this.caseInsensitive,
       });
-    })();
+    })().catch((e: unknown) => {
+      this.index = undefined;
+      throw e;
+    });
     return this.index;
   }
 
@@ -204,73 +288,175 @@ export class HttpFileSystem implements CsFileSystem {
     return new RangeFile(
       canonical,
       size,
-      (start, end) => this.readRange(canonical, start, end),
+      (start, end) => this.readRange(canonical, size, start, end),
       mimeType(canonical),
     );
   }
 
-  /** The only place bytes are fetched. */
-  private async readRange(path: string, start: number, end: number): Promise<Uint8Array> {
+  /** The only place bytes are fetched. `size` is what the manifest says. */
+  private async readRange(
+    path: string,
+    size: number,
+    start: number,
+    end: number,
+  ): Promise<Uint8Array> {
     if (end <= start) return new Uint8Array(0);
+    if (this.ranges === undefined && this.probe) {
+      // Someone is already finding out; their answer decides how to ask.
+      await this.probe;
+      return this.readRange(path, size, start, end);
+    }
     // `"auto"` stops asking once a host has shown it ignores the header:
     // the probe is only worth one round trip, not one per read.
     if (this.ranges === false) {
-      return (await this.wholeBody(path)).slice(start, end);
+      return (await this.wholeBody(path, size)).slice(start, end);
     }
+    const request = this.rangeRequest(path, size, start, end);
+    if (this.ranges === undefined) {
+      // Settles either way and never rejects: its failure is the reader's to
+      // report, not an unhandled rejection when nobody else was waiting.
+      const probe: Promise<void> = request
+        .then(
+          () => {},
+          () => {},
+        )
+        .finally(() => {
+          if (this.probe === probe) this.probe = undefined;
+        });
+      this.probe = probe;
+    }
+    return request;
+  }
 
+  private async rangeRequest(
+    path: string,
+    size: number,
+    start: number,
+    end: number,
+  ): Promise<Uint8Array> {
     const url = this.url(path);
     const res = await this.fetchImpl(url, { headers: { Range: `bytes=${start}-${end - 1}` } });
-    const type = res.headers.get("content-type") ?? "";
-    if (looksLikeHtml(type)) throw new NotDataError(url, type);
+    // Status first. A 404 that happens to be an HTML page is a missing file,
+    // not a sign the whole tree is elsewhere, and saying the second sends
+    // someone to check a base URL that is fine.
+    if (res.status !== 206 && res.status !== 200) {
+      discard(res);
+      if (res.status === 416) {
+        // Not "no such range" — the manifest says this file is longer than the
+        // host thinks it is, which means the manifest is stale. Saying "range
+        // unsupported" would send someone to check their server config.
+        throw new BackendError(
+          `range ${start}-${end - 1} is not satisfiable — the manifest and the host ` +
+            `disagree about this file's length`,
+          url,
+        );
+      }
+      throw new BackendError(`HTTP ${res.status} on a Range request`, url);
+    }
+    if (unexpectedHtml(res, path)) {
+      discard(res);
+      throw new NotDataError(url, res.headers.get("content-type") ?? "");
+    }
 
     if (res.status === 206) {
       this.ranges = true;
-      return new Uint8Array(await res.arrayBuffer());
-    }
-    if (res.status === 200) {
-      // The host ignored the header, so this body is the *whole* file. Using it
-      // as the slice would hand back the wrong bytes with no error at all — so
-      // it is either sliced here or refused, never passed through.
-      if (this.rangeMode === "require") throw new RangeUnsupportedError(url, res.status);
-      this.ranges = false;
+      // A 206 is not proof of the *asked-for* bytes. A host clamps a range to
+      // the file it has, so a manifest that says the file is longer gets a
+      // short read here; a proxy may answer with a different range entirely.
+      // Either one used as the slice is wrong bytes with no error.
+      const got = contentRange(res);
+      if (got && (got[0] !== start || got[1] !== end - 1)) {
+        discard(res);
+        throw new BackendError(
+          `asked for bytes ${start}-${end - 1}, got ${got[0]}-${got[1]} — the manifest ` +
+            `and the host disagree about this file's length`,
+          url,
+        );
+      }
       const bytes = new Uint8Array(await res.arrayBuffer());
-      this.remember(path, bytes);
-      return bytes.slice(start, end);
+      if (bytes.byteLength !== end - start) {
+        throw new BackendError(
+          `asked for ${end - start} bytes, got ${bytes.byteLength} — the manifest and ` +
+            `the host disagree about this file's length`,
+          url,
+        );
+      }
+      return bytes;
     }
-    if (res.status === 416) {
-      // Not "no such range" — the manifest says this file is longer than the
-      // host thinks it is, which means the manifest is stale. Saying "range
-      // unsupported" would send someone to check their server config.
+    // The host ignored the header, so this body is the *whole* file. Using it
+    // as the slice would hand back the wrong bytes with no error at all — so
+    // it is either sliced here or refused, never passed through.
+    if (this.rangeMode === "require") {
+      discard(res);
+      throw new RangeUnsupportedError(url, res.status);
+    }
+    this.ranges = false;
+    const bytes = await this.checkedBody(res, url, size);
+    this.remember(path, bytes);
+    return bytes.slice(start, end);
+  }
+
+  /** A whole body, refused if it is not the length the manifest records. */
+  private async checkedBody(res: Response, url: string, size: number): Promise<Uint8Array> {
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    if (bytes.byteLength !== size) {
       throw new BackendError(
-        `range ${start}-${end - 1} is not satisfiable — the manifest and the host ` +
-          `disagree about this file's length`,
+        `manifest says ${size} bytes, host sent ${bytes.byteLength} — the manifest is stale`,
         url,
       );
     }
-    throw new BackendError(`HTTP ${res.status} on a Range request`, url);
-  }
-
-  /** The whole file, for the no-`Range` path. Keeps the most recent body. */
-  private async wholeBody(path: string): Promise<Uint8Array> {
-    if (this.whole?.path === path) return this.whole.bytes;
-    const url = this.url(path);
-    const res = await this.fetchImpl(url);
-    const type = res.headers.get("content-type") ?? "";
-    if (looksLikeHtml(type)) throw new NotDataError(url, type);
-    if (!res.ok) throw new BackendError(`HTTP ${res.status}`, url);
-    const bytes = new Uint8Array(await res.arrayBuffer());
-    this.remember(path, bytes);
     return bytes;
   }
 
-  private remember(path: string, bytes: Uint8Array): void {
-    if (bytes.byteLength > this.wholeFileCacheBytes) {
-      // Explicitly dropped rather than left in place: holding the previous
-      // file while repeatedly refetching a larger one is the worst of both.
-      if (this.whole?.path === path) this.whole = undefined;
-      return;
+  /** The whole file, for the no-`Range` path. Kept while it fits the budget. */
+  private wholeBody(path: string, size: number): Promise<Uint8Array> {
+    const kept = this.whole.get(path);
+    if (kept) {
+      // Re-inserted, so the map's order stays least-recently-used first.
+      this.whole.delete(path);
+      this.whole.set(path, kept);
+      return Promise.resolve(kept);
     }
-    this.whole = { path, bytes };
+    // Shared, so two slices of an uncached file cost one download, not two.
+    let pending = this.pending.get(path);
+    if (!pending) {
+      pending = (async () => {
+        const url = this.url(path);
+        const res = await this.fetchImpl(url);
+        if (!res.ok) {
+          discard(res);
+          throw new BackendError(`HTTP ${res.status}`, url);
+        }
+        if (unexpectedHtml(res, path)) {
+          discard(res);
+          throw new NotDataError(url, res.headers.get("content-type") ?? "");
+        }
+        const bytes = await this.checkedBody(res, url, size);
+        this.remember(path, bytes);
+        return bytes;
+      })().finally(() => this.pending.delete(path));
+      this.pending.set(path, pending);
+    }
+    return pending;
+  }
+
+  private remember(path: string, bytes: Uint8Array): void {
+    const previous = this.whole.get(path);
+    if (previous) {
+      this.whole.delete(path);
+      this.wholeBytes -= previous.byteLength;
+    }
+    // Never kept rather than evicting everything else for it: holding nothing
+    // while repeatedly refetching a body larger than the budget is no worse,
+    // and emptying the cache for it would make the smaller files pay too.
+    if (bytes.byteLength > this.wholeFileCacheBytes) return;
+    this.whole.set(path, bytes);
+    this.wholeBytes += bytes.byteLength;
+    for (const [oldest, body] of this.whole) {
+      if (this.wholeBytes <= this.wholeFileCacheBytes) break;
+      this.whole.delete(oldest);
+      this.wholeBytes -= body.byteLength;
+    }
   }
 
   async directory(path: string): Promise<CsDirectory | null> {

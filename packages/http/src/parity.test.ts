@@ -86,6 +86,8 @@ beforeAll(async () => {
   await writeFile(join(dir, "top.txt"), "at the top");
   await writeFile(join(dir, "deep", "nested", "big.bin"), pattern(300_000));
   await writeFile(join(dir, "deep", "note.txt"), "nested note");
+  // Every character a URL would otherwise read as syntax, in one name.
+  await writeFile(join(dir, "deep", "odd name #1 100%?.txt"), "oddly named");
   // A flat archive standing in for a nested tree, and one plain archive.
   await writeFile(
     join(dir, "drawings.zip"),
@@ -153,6 +155,11 @@ describe("HTTP and Node agree", () => {
     // local side too rather than being papered over here.
     const localList = (await collect(local)).filter((l) => !l.includes(MANIFEST_FILE));
     expect(await collect(remote)).toEqual(localList);
+  });
+
+  it("reads a file whose name a URL would take for syntax", async () => {
+    const path = "/deep/odd name #1 100%?.txt";
+    expect(await (await httpFileSystem(base).file(path))?.text()).toBe("oddly named");
   });
 
   it("returns identical bytes for a whole file", async () => {

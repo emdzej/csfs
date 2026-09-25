@@ -45,14 +45,21 @@ Each of these otherwise presents as data that is subtly wrong rather than as an
 error, which is much more expensive to debug than a clean failure.
 
 - **A host that ignores `Range`** answers `200` with the whole body. Treating
-  that as the requested slice hands back the wrong bytes with no error at all.
-  Anything but `206` raises `RangeUnsupportedError`.
+  that as the requested slice hands back the wrong bytes with no error at all,
+  so it never is. By default (`ranges: "auto"`) the body is sliced locally and
+  the header is not sent again; `ranges: "require"` raises
+  `RangeUnsupportedError` instead, for a consumer that would rather fail than
+  download a whole archive to read 64 KB of it; `ranges: "never"` skips the
+  probe. `rangesSupported` says which one is happening.
 - **A single-page app answers unknown paths with its own HTML and a `200`**, so
   a mistyped base URL looks like a working tree whose files all happen to be
   documents. An HTML content type where data was expected raises `NotDataError`
-  — a distinct type from a 404, because the two need opposite handling.
-- **A missing `Content-Length`** means the size is unknown, and a zip read from
-  its end cannot start. Better said than guessed.
+  — a distinct type from a 404, because the two need opposite handling. A file
+  that _is_ HTML is read as one, and a 404 page is a failed read of that file.
+- **A host that disagrees with the manifest** about a file's length — a `416`,
+  a `206` for a different range or fewer bytes, a whole body of the wrong
+  size — is a stale manifest, and raises `BackendError` saying so rather than
+  returning a short read.
 
 ## Archives
 
@@ -84,6 +91,13 @@ to an archive gets the chance rather than holding a URL that 404s silently.
 One `Range` request per read. Requests within a file are independent, so
 concurrent reads become concurrent requests — a depth-3 index lookup costs one
 round trip's latency rather than three.
+
+Without `Range`, each file is downloaded once and kept while it fits in
+`wholeFileCacheBytes` (16 MiB by default), so the several slices that opening
+one archive takes cost one download. Concurrent reads share it.
+
+Paths are percent-encoded segment by segment, and a query on the base URL — a
+presigned or SAS token — is carried onto every request.
 
 ## Licence
 
