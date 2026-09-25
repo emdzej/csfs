@@ -31,11 +31,14 @@ import {
   mimeType,
   normalizePath,
   segments,
+  shared,
+  untilAborted,
   type CsDirectory,
   type CsEntry,
   type CsFile,
   type CsFileSystem,
   type CsStat,
+  type ReadOptions,
 } from "@emdzej/csfs-core";
 import {
   MANIFEST_FILE,
@@ -180,7 +183,7 @@ export class HttpFileSystem implements CsFileSystem {
   private readonly whole = new Map<string, Uint8Array>();
   private wholeBytes = 0;
   /** Whole-body downloads in flight, so two slices of one file share one. */
-  private readonly pending = new Map<string, Promise<Uint8Array>>();
+  private readonly pending = new Map<string, (signal?: AbortSignal) => Promise<Uint8Array>>();
 
   constructor(baseUrl: string, opts: HttpFileSystemOptions = {}) {
     const [head, ...rest] = baseUrl.split("#")[0]!.split("?");
@@ -288,7 +291,7 @@ export class HttpFileSystem implements CsFileSystem {
     return new RangeFile(
       canonical,
       size,
-      (start, end) => this.readRange(canonical, size, start, end),
+      (start, end, signal) => this.readRange(canonical, size, start, end, signal),
       mimeType(canonical),
     );
   }
@@ -299,19 +302,21 @@ export class HttpFileSystem implements CsFileSystem {
     size: number,
     start: number,
     end: number,
+    signal?: AbortSignal,
   ): Promise<Uint8Array> {
+    signal?.throwIfAborted();
     if (end <= start) return new Uint8Array(0);
     if (this.ranges === undefined && this.probe) {
       // Someone is already finding out; their answer decides how to ask.
-      await this.probe;
-      return this.readRange(path, size, start, end);
+      await untilAborted(this.probe, signal);
+      return this.readRange(path, size, start, end, signal);
     }
     // `"auto"` stops asking once a host has shown it ignores the header:
     // the probe is only worth one round trip, not one per read.
     if (this.ranges === false) {
-      return (await this.wholeBody(path, size)).slice(start, end);
+      return (await this.wholeBody(path, size, signal)).slice(start, end);
     }
-    const request = this.rangeRequest(path, size, start, end);
+    const request = this.rangeRequest(path, size, start, end, signal);
     if (this.ranges === undefined) {
       // Settles either way and never rejects: its failure is the reader's to
       // report, not an unhandled rejection when nobody else was waiting.
@@ -333,9 +338,13 @@ export class HttpFileSystem implements CsFileSystem {
     size: number,
     start: number,
     end: number,
+    signal?: AbortSignal,
   ): Promise<Uint8Array> {
     const url = this.url(path);
-    const res = await this.fetchImpl(url, { headers: { Range: `bytes=${start}-${end - 1}` } });
+    const res = await this.fetchImpl(url, {
+      headers: { Range: `bytes=${start}-${end - 1}` },
+      ...(signal ? { signal } : {}),
+    });
     // Status first. A 404 that happens to be an HTML page is a missing file,
     // not a sign the whole tree is elsewhere, and saying the second sends
     // someone to check a base URL that is fine.
@@ -409,7 +418,7 @@ export class HttpFileSystem implements CsFileSystem {
   }
 
   /** The whole file, for the no-`Range` path. Kept while it fits the budget. */
-  private wholeBody(path: string, size: number): Promise<Uint8Array> {
+  private wholeBody(path: string, size: number, signal?: AbortSignal): Promise<Uint8Array> {
     const kept = this.whole.get(path);
     if (kept) {
       // Re-inserted, so the map's order stays least-recently-used first.
@@ -417,12 +426,13 @@ export class HttpFileSystem implements CsFileSystem {
       this.whole.set(path, kept);
       return Promise.resolve(kept);
     }
-    // Shared, so two slices of an uncached file cost one download, not two.
+    // Shared, so two slices of an uncached file cost one download, not two —
+    // and cancelled only once every reader waiting on it has given up.
     let pending = this.pending.get(path);
     if (!pending) {
-      pending = (async () => {
+      const task = shared(async (cancel) => {
         const url = this.url(path);
-        const res = await this.fetchImpl(url);
+        const res = await this.fetchImpl(url, { signal: cancel });
         if (!res.ok) {
           discard(res);
           throw new BackendError(`HTTP ${res.status}`, url);
@@ -434,10 +444,22 @@ export class HttpFileSystem implements CsFileSystem {
         const bytes = await this.checkedBody(res, url, size);
         this.remember(path, bytes);
         return bytes;
-      })().finally(() => this.pending.delete(path));
+      });
+      // Out of the map once it settles either way: a success is in `whole`
+      // now, or is too big to be, and a failure should be tried afresh.
+      pending = (s?: AbortSignal) => {
+        const run = task(s);
+        run.then(
+          () => this.pending.delete(path),
+          () => {
+            if (!s?.aborted) this.pending.delete(path);
+          },
+        );
+        return run;
+      };
       this.pending.set(path, pending);
     }
-    return pending;
+    return pending(signal);
   }
 
   private remember(path: string, bytes: Uint8Array): void {
@@ -466,8 +488,8 @@ export class HttpFileSystem implements CsFileSystem {
     return new HttpDirectory(this, index, canonical);
   }
 
-  async read(path: string): Promise<Uint8Array | null> {
-    return (await this.file(path))?.bytes() ?? null;
+  async read(path: string, opts?: ReadOptions): Promise<Uint8Array | null> {
+    return (await this.file(path))?.bytes(opts) ?? null;
   }
 
   async stat(path: string): Promise<CsStat | null> {

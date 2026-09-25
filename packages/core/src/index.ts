@@ -4,3 +4,4 @@ export * from "./file.js";
 export * from "./mime.js";
 export * from "./errors.js";
 export * from "./walk.js";
+export * from "./share.js";

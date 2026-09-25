@@ -19,6 +19,19 @@
  * use. A read-only filesystem is the common case and should be the plain one.
  */
 
+/**
+ * Options for a read.
+ *
+ * `signal` cancels it: a read that has not finished rejects with the signal's
+ * reason, and the backend stops fetching or inflating unless another reader
+ * is sharing the same work. A `Blob` ignores the argument, which is why a
+ * `Blob` still satisfies `CsFile` — it reads from memory or disk, where there
+ * is little to cancel.
+ */
+export interface ReadOptions {
+  readonly signal?: AbortSignal;
+}
+
 /** A file, or a slice of one. Deliberately `Blob`-shaped. */
 export interface CsFile {
   /** Full path within its filesystem, including any archive fragment. */
@@ -42,10 +55,11 @@ export interface CsFile {
    */
   slice(start?: number, end?: number): CsFile;
 
-  arrayBuffer(): Promise<ArrayBuffer>;
-  bytes(): Promise<Uint8Array>;
+  arrayBuffer(opts?: ReadOptions): Promise<ArrayBuffer>;
+  bytes(opts?: ReadOptions): Promise<Uint8Array>;
+  /** Cancel it by cancelling the stream. */
   stream(): ReadableStream<Uint8Array>;
-  text(): Promise<string>;
+  text(opts?: ReadOptions): Promise<string>;
 }
 
 export type CsEntry =
@@ -97,7 +111,7 @@ export interface CsFileSystem {
   directory(path: string): Promise<CsDirectory | null>;
 
   /** Shorthand for `file(path)` then `bytes()`. `null` if absent. */
-  read(path: string): Promise<Uint8Array | null>;
+  read(path: string, opts?: ReadOptions): Promise<Uint8Array | null>;
 
   /** Does this path exist, and as what? */
   stat(path: string): Promise<CsStat | null>;

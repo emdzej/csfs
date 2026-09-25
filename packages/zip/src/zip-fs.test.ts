@@ -361,6 +361,37 @@ describe("mounted archives, beyond the happy path", () => {
   });
 });
 
+describe("reading an entry", () => {
+  it("inflates on the first read, not at lookup, and once for every slice", async () => {
+    const zip = await makeZip([{ name: "big.bin", bytes: new Uint8Array(100_000).fill(7) }]);
+    let read = 0;
+    const archive = new RangeFile("/a.zip", zip.byteLength, async (s, e) => {
+      read += e - s;
+      return zip.subarray(s, e);
+    });
+    const fs = zipFileSystem(archive);
+    const file = (await fs.file("/big.bin"))!;
+    const afterLookup = read;
+    expect(file.size).toBe(100_000);
+    await file.slice(0, 10).bytes();
+    const afterFirst = read;
+    expect(afterFirst).toBeGreaterThan(afterLookup);
+    await file.slice(50_000, 50_010).bytes();
+    await file.bytes();
+    expect(read).toBe(afterFirst);
+  });
+
+  it("stops inflating when the read is cancelled", async () => {
+    const zip = await makeZip([{ name: "x.txt", text: "hello" }]);
+    const fs = zipFileSystem(fileOf("/a.zip", zip));
+    const file = (await fs.file("/x.txt"))!;
+    await expect(file.text({ signal: AbortSignal.abort(new Error("no")) })).rejects.toThrow(
+      "no",
+    );
+    expect(await file.text()).toBe("hello");
+  });
+});
+
 describe("archives that fail to open", () => {
   const flaky = (bytes: Uint8Array, failures: { left: number; error: () => Error }) => {
     const fs: CsFileSystem = {

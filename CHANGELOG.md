@@ -171,6 +171,12 @@ bump is where features land.
 
 ### Added
 
+- **Reads can be cancelled.** `bytes`, `arrayBuffer`, `text` and `read` take an
+  optional `{ signal }`. HTTP hands it to `fetch`; zip hands it to the inflater.
+  Work shared between readers — a whole-file download, an entry's inflation —
+  stops only when every reader waiting on it has aborted, through a new
+  `shared()` helper in core. `Blob` and `File` still satisfy `CsFile`: they
+  ignore the argument.
 - A base URL's query string — a presigned or SAS token — is carried onto every
   request.
 - A manifest uploaded gzipped without `Content-Encoding` is recognised by its

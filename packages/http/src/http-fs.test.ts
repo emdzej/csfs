@@ -495,3 +495,58 @@ describe("HttpFileSystem, against a host that misbehaves", () => {
     expect(calls.length - 1).toBe(2);
   });
 });
+
+describe("HttpFileSystem, cancelled", () => {
+  /** A fetch that never answers until its signal aborts, recording what it got. */
+  function hanging() {
+    const signals: (AbortSignal | undefined)[] = [];
+    const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes("/csfs-manifest.json")) {
+        return new Response(JSON.stringify(MANIFEST), {
+          headers: { "content-type": "application/json" },
+        });
+      }
+      const signal = init?.signal ?? undefined;
+      signals.push(signal);
+      return new Promise<Response>((_, reject) => {
+        signal?.addEventListener("abort", () => reject(signal.reason));
+      });
+    }) as typeof globalThis.fetch;
+    return { impl, signals };
+  }
+
+  it("aborts the request a cancelled read made", async () => {
+    const { impl, signals } = hanging();
+    const fs = httpFileSystem("http://host/data", { fetch: impl });
+    const controller = new AbortController();
+    const read = fs.read("/a.txt", { signal: controller.signal });
+    await new Promise((r) => setTimeout(r, 0));
+    controller.abort(new Error("gave up"));
+    await expect(read).rejects.toThrow("gave up");
+    expect(signals[0]?.aborted).toBe(true);
+  });
+
+  it("keeps a shared download going for a reader that stayed", async () => {
+    let requests = 0;
+    const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes("/csfs-manifest.json")) {
+        return new Response(JSON.stringify(MANIFEST), {
+          headers: { "content-type": "application/json" },
+        });
+      }
+      requests += 1;
+      await new Promise((r) => setTimeout(r, 10));
+      init?.signal?.throwIfAborted();
+      return new Response(pattern(256), { status: 200 });
+    }) as typeof globalThis.fetch;
+    const fs = httpFileSystem("http://host/data", { fetch: impl, ranges: "never" });
+    const file = (await fs.file("/deep/nested/b.bin"))!;
+    const leaving = new AbortController();
+    const a = file.slice(0, 4).bytes({ signal: leaving.signal });
+    const b = file.slice(4, 8).bytes({ signal: new AbortController().signal });
+    leaving.abort(new Error("left"));
+    await expect(a).rejects.toThrow("left");
+    expect(await b).toEqual(pattern(256).subarray(4, 8));
+    expect(requests).toBe(1);
+  });
+});

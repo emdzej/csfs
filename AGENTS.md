@@ -55,6 +55,16 @@ b).slice(c, d)` must cost nothing until something is read, because a zip
   reader slices its way down through several layers before touching the network
   once.
 
+## Cancelling shared work
+
+A read takes `{ signal }`, and most expensive work is shared between readers —
+one download of a file several slices want, one inflation of an entry. Aborting
+shared work because one reader left fails the others; never aborting it keeps a
+945 MB download going after everyone has gone. `shared()` in core is the
+answer: cancelled when the last reader _with_ a signal aborts, never while a
+reader without one waits. Use it rather than a bare cached promise when you add
+a shared fetch.
+
 ## Absence is `null`, not an exception
 
 `file()` and `directory()` return `null` so existence can be tested without a
@@ -221,8 +231,6 @@ code. Keep it that way.
 - **The browser backends have no browser tests.** `fsa` and `opfs` run over
   the in-memory fake, but nothing drives a real directory picker — that needs
   interaction a headless run cannot supply.
-- **No `AbortSignal`.** Nothing in core or http takes one, so a cancelled read
-  keeps downloading.
 - **`RangeFile.stream()` buffers the whole range** before yielding it. HTTP
   could stream `res.body` instead.
 - **`bimmerz-core` still has its own `vfs`.** The intent is for it to depend on

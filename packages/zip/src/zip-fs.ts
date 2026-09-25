@@ -16,8 +16,9 @@ import { ZipReader, type Entry, type FileEntry } from "@zip.js/zip.js";
 import {
   BackendError,
   basename,
+  RangeFile,
   blobFile,
-  bytesFile,
+  shared,
   mimeType,
   segments,
   type CsDirectory,
@@ -25,6 +26,7 @@ import {
   type CsFile,
   type CsFileSystem,
   type CsStat,
+  type ReadOptions,
   type BlobLike,
 } from "@emdzej/csfs-core";
 import { CsFileReader } from "./reader.js";
@@ -164,7 +166,7 @@ export class ZipFileSystem implements CsFileSystem {
    * a 100 MB entry is 200 MB. The size is trusted only as a starting point: an
    * entry that inflates past it grows the buffer rather than being cut short.
    */
-  private async readEntry(entry: FileEntry): Promise<Uint8Array> {
+  private async readEntry(entry: FileEntry, signal: AbortSignal): Promise<Uint8Array> {
     let out = new Uint8Array(entry.uncompressedSize);
     let at = 0;
     const sink = new WritableStream<Uint8Array>({
@@ -181,19 +183,36 @@ export class ZipFileSystem implements CsFileSystem {
     await entry.getData(sink, {
       ...(this.opts.password !== undefined ? { password: this.opts.password } : {}),
       useWebWorkers: false,
+      signal,
     });
+    // The file was sized from the central directory before a byte was read,
+    // so an entry that inflates to another length would have handed out a
+    // `size` that its bytes contradict.
+    if (at !== entry.uncompressedSize) {
+      throw new BackendError(
+        `entry inflated to ${at} bytes where the archive says ${entry.uncompressedSize}`,
+        `${this.archive.path}#/${entry.filename}`,
+      );
+    }
     return at === out.byteLength ? out : out.slice(0, at);
   }
 
   async file(path: string): Promise<CsFile | null> {
     const found = await this.nodeAt(path);
     if (!found?.node.entry) return null;
-    // Decompressed eagerly, and only on request. A `CsFile` promises random
-    // access, and a deflated entry has no seekable form — offering a lazy
-    // slice would mean re-inflating from the start for every read, which is
-    // slower and more surprising than doing it once.
-    const bytes = await this.readEntry(found.node.entry);
-    return bytesFile(found.path, bytes, mimeType(found.path));
+    const entry = found.node.entry;
+    // Inflated on the first read, not at lookup, and once for the file and
+    // every slice of it. A deflated entry has no seekable form, so a slice
+    // cannot be inflated on its own — but inflating in `file()` made a lookup
+    // cost the whole entry and left no way to cancel it. Shared, so the
+    // inflation stops only when every reader waiting on it has aborted.
+    const inflate = shared((signal) => this.readEntry(entry, signal));
+    return new RangeFile(
+      found.path,
+      entry.uncompressedSize,
+      async (start, end, signal) => (await inflate(signal)).subarray(start, end),
+      mimeType(found.path),
+    );
   }
 
   async directory(path: string): Promise<CsDirectory | null> {
@@ -202,8 +221,8 @@ export class ZipFileSystem implements CsFileSystem {
     return new ZipDirectory(this, found.node, found.path);
   }
 
-  async read(path: string): Promise<Uint8Array | null> {
-    return (await this.file(path))?.bytes() ?? null;
+  async read(path: string, opts?: ReadOptions): Promise<Uint8Array | null> {
+    return (await this.file(path))?.bytes(opts) ?? null;
   }
 
   async stat(path: string): Promise<CsStat | null> {

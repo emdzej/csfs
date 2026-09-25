@@ -30,8 +30,9 @@ interface CsFileSystem {
   readonly kind: string; // "http", "fsa+zip", … — for diagnostics
   file(path: string): Promise<CsFile | null>;
   directory(path: string): Promise<CsDirectory | null>;
-  read(path: string): Promise<Uint8Array | null>;
+  read(path: string, opts?: ReadOptions): Promise<Uint8Array | null>;
   stat(path: string): Promise<CsStat | null>;
+  directUrl?(path: string): Promise<string | null>;
 }
 ```
 
@@ -41,6 +42,12 @@ makes remote data usable: an archive is read from its end, a sorted index is
 binary-searched, a video is seeked. An interface whose only read is "give me the
 whole thing" forces a full download per lookup. Because `Blob` and `File`
 already have this shape, the local backends need no adapter at all.
+
+**A read can be cancelled.** `bytes`, `arrayBuffer`, `text` and `read` take an
+optional `{ signal }`. HTTP aborts the request and zip stops inflating — unless
+another reader is sharing the same download, in which case it carries on for
+them. A `Blob` ignores the argument, which is why one still satisfies the
+interface. A stream is cancelled by cancelling it.
 
 **Absence returns `null`.** Checking whether something exists needs no
 `try`/`catch`. Errors are for a caller asking something impossible, or a host
@@ -52,16 +59,17 @@ one interface would make every consumer check capabilities it never uses.
 
 ## What is in here
 
-| Export                                                                               | Why                                                                                             |
-| ------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
-| `BlobFile`                                                                           | a `CsFile` over anything `Blob`-shaped                                                          |
-| `RangeFile`                                                                          | a `CsFile` over a `(start, end) => Promise<Uint8Array>` reader; `slice` composes by arithmetic  |
-| `bytesFile`, `blobFile`, `toBlob`, `objectUrl`                                       | constructing files and getting a URL for an `<img>`                                             |
-| `parsePath`, `formatPath`, `normalizePath`                                           | `#` fragment addressing, and `..` resolved without escaping the root                            |
-| `dirname`, `basename`, `extname`, `joinPath`, `segments`                             | path arithmetic that does not import `node:path`                                                |
-| `mimeType`, `registerMimeType`                                                       | extension → type, so `file.type` is populated on backends that do not report one                |
-| `walk`, `walkFileSystem`, `resolveFile`, `resolveDirectory`, `statVia`               | depth-first iteration, and the shared implementations of "resolve a path one segment at a time" |
-| `NotDataError`, `RangeUnsupportedError`, `BackendError`, `UnsupportedOperationError` | the failures worth telling apart                                                                |
+| Export                                                                               | Why                                                                                                     |
+| ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
+| `BlobFile`                                                                           | a `CsFile` over anything `Blob`-shaped                                                                  |
+| `RangeFile`                                                                          | a `CsFile` over a `(start, end, signal?) => Promise<Uint8Array>` reader; `slice` composes by arithmetic |
+| `shared`, `untilAborted`                                                             | one piece of work for several readers, cancelled only when all of them have given up                    |
+| `bytesFile`, `blobFile`, `toBlob`, `objectUrl`                                       | constructing files and getting a URL for an `<img>`                                                     |
+| `parsePath`, `formatPath`, `normalizePath`                                           | `#` fragment addressing, and `..` resolved without escaping the root                                    |
+| `dirname`, `basename`, `extname`, `joinPath`, `segments`                             | path arithmetic that does not import `node:path`                                                        |
+| `mimeType`, `registerMimeType`                                                       | extension → type, so `file.type` is populated on backends that do not report one                        |
+| `walk`, `walkFileSystem`, `resolveFile`, `resolveDirectory`, `statVia`               | depth-first iteration, and the shared implementations of "resolve a path one segment at a time"         |
+| `NotDataError`, `RangeUnsupportedError`, `BackendError`, `UnsupportedOperationError` | the failures worth telling apart                                                                        |
 
 `RangeFile` is the one to understand if you are writing a backend: give it a
 size and a range reader, and slicing is free — `slice(100, 200).slice(10, 20)`

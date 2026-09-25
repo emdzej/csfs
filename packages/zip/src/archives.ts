@@ -27,6 +27,7 @@ import {
   type CsFile,
   type CsFileSystem,
   type CsStat,
+  type ReadOptions,
 } from "@emdzej/csfs-core";
 import { ZipFileSystem, zipFileSystem, type ZipFileSystemOptions } from "./zip-fs.js";
 
@@ -83,20 +84,20 @@ class PathedFile implements CsFile {
     return new PathedFile(this.inner.slice(start, end), this.path);
   }
 
-  arrayBuffer(): Promise<ArrayBuffer> {
-    return this.inner.arrayBuffer();
+  arrayBuffer(opts?: ReadOptions): Promise<ArrayBuffer> {
+    return this.inner.arrayBuffer(opts);
   }
 
-  bytes(): Promise<Uint8Array> {
-    return this.inner.bytes();
+  bytes(opts?: ReadOptions): Promise<Uint8Array> {
+    return this.inner.bytes(opts);
   }
 
   stream(): ReadableStream<Uint8Array> {
     return this.inner.stream();
   }
 
-  text(): Promise<string> {
-    return this.inner.text();
+  text(opts?: ReadOptions): Promise<string> {
+    return this.inner.text(opts);
   }
 }
 
@@ -213,8 +214,8 @@ export function withArchives(fs: CsFileSystem, opts?: ZipFileSystemOptions): CsF
         : null;
     },
 
-    async read(path) {
-      return (await resolve(path))?.bytes() ?? null;
+    async read(path, opts) {
+      return (await resolve(path))?.bytes(opts) ?? null;
     },
 
     async stat(path) {
@@ -368,8 +369,8 @@ export function withTransparentArchives(
       return (await fs.file(path)) ?? (await fromArchives(path));
     },
 
-    async read(path) {
-      return (await this.file(path))?.bytes() ?? null;
+    async read(path, opts) {
+      return (await this.file(path))?.bytes(opts) ?? null;
     },
 
     async directory(path) {

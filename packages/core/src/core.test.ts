@@ -12,6 +12,7 @@ import {
   formatPath,
   normalizePath,
   parsePath,
+  shared,
   walkFileSystem,
   type CsDirectory,
   type CsFileSystem,
@@ -146,5 +147,83 @@ describe("walkFileSystem", () => {
     const filter = (e: { path: string }) => e.path !== "/a/b";
     for await (const e of walkFileSystem(fs, "/", { filter })) paths.push(e.path);
     expect(paths).toEqual(["/a/x.txt", "/top.txt"]);
+  });
+});
+
+describe("shared", () => {
+  /** Work that finishes when told to, and reports whether it was cancelled. */
+  function work() {
+    let finish!: (v: string) => void;
+    const state = { starts: 0, cancelled: false };
+    const task = shared((signal) => {
+      state.starts += 1;
+      signal.addEventListener("abort", () => (state.cancelled = true));
+      return new Promise<string>((resolve) => (finish = resolve));
+    });
+    return { task, state, finish: (v: string) => finish(v) };
+  }
+
+  it("keeps going for the readers who stayed", async () => {
+    const { task, state, finish } = work();
+    const leaving = new AbortController();
+    const a = task(leaving.signal);
+    const b = task(new AbortController().signal);
+    leaving.abort(new Error("left"));
+    await expect(a).rejects.toThrow("left");
+    finish("done");
+    expect(await b).toBe("done");
+    expect(state).toEqual({ starts: 1, cancelled: false });
+  });
+
+  it("stops when every reader has left, and starts again for the next", async () => {
+    const { task, state } = work();
+    const one = new AbortController();
+    const two = new AbortController();
+    const a = task(one.signal);
+    const b = task(two.signal);
+    one.abort();
+    two.abort();
+    await expect(a).rejects.toBeDefined();
+    await expect(b).rejects.toBeDefined();
+    expect(state.cancelled).toBe(true);
+    void task(new AbortController().signal);
+    expect(state.starts).toBe(2);
+  });
+
+  it("is never cancelled while a reader without a signal waits", async () => {
+    const { task, state, finish } = work();
+    const leaving = new AbortController();
+    const pinned = task();
+    const a = task(leaving.signal);
+    leaving.abort();
+    await expect(a).rejects.toBeDefined();
+    finish("done");
+    expect(await pinned).toBe("done");
+    expect(state.cancelled).toBe(false);
+  });
+});
+
+describe("reading with a signal", () => {
+  it("does not start a read already aborted", async () => {
+    let reads = 0;
+    const file = new RangeFile("/f", 10, async () => {
+      reads += 1;
+      return new Uint8Array(10);
+    });
+    const signal = AbortSignal.abort(new Error("no"));
+    await expect(file.bytes({ signal })).rejects.toThrow("no");
+    await expect(bytesFile("/b", new Uint8Array(1)).text({ signal })).rejects.toThrow("no");
+    expect(reads).toBe(0);
+  });
+
+  it("hands the signal to the reader", async () => {
+    let seen: AbortSignal | undefined;
+    const file = new RangeFile("/f", 10, async (_s, _e, signal) => {
+      seen = signal;
+      return new Uint8Array(4);
+    });
+    const controller = new AbortController();
+    await file.slice(2, 6).bytes({ signal: controller.signal });
+    expect(seen).toBe(controller.signal);
   });
 });

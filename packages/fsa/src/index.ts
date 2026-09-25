@@ -31,6 +31,7 @@ import {
   type CsEntry,
   type CsFile,
   type CsStat,
+  type ReadOptions,
   type WritableFileSystem,
 } from "@emdzej/csfs-core";
 
@@ -511,8 +512,8 @@ export class FsaFileSystem implements WritableFileSystem {
     return found ? new FsaDirectory(this, found.handle, found.path) : null;
   }
 
-  async read(path: string): Promise<Uint8Array | null> {
-    return (await this.file(path))?.bytes() ?? null;
+  async read(path: string, opts?: ReadOptions): Promise<Uint8Array | null> {
+    return (await this.file(path))?.bytes(opts) ?? null;
   }
 
   async stat(path: string): Promise<CsStat | null> {

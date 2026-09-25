@@ -9,7 +9,7 @@
  * Both exist so a backend supplies the one primitive it actually has and gets
  * `slice`, `arrayBuffer`, `bytes`, `stream` and `text` for nothing.
  */
-import type { CsFile } from "./types.js";
+import type { CsFile, ReadOptions } from "./types.js";
 import { basename } from "./path.js";
 
 /** Minimal `Blob` surface. `Blob` and `File` both satisfy it as they are. */
@@ -49,20 +49,32 @@ export class BlobFile implements CsFile {
     return new BlobFile(this.path, this.blob.slice(start, end), this.mime);
   }
 
-  arrayBuffer(): Promise<ArrayBuffer> {
-    return this.blob.arrayBuffer();
+  /*
+   * A `Blob` read cannot be cancelled, so a signal is honoured at the edges:
+   * already aborted, the read does not start; aborted during it, the result is
+   * not handed over. For a file on disk or in memory, that is most of the
+   * value a signal has.
+   */
+  async arrayBuffer(opts?: ReadOptions): Promise<ArrayBuffer> {
+    opts?.signal?.throwIfAborted();
+    const buffer = await this.blob.arrayBuffer();
+    opts?.signal?.throwIfAborted();
+    return buffer;
   }
 
-  async bytes(): Promise<Uint8Array> {
-    return new Uint8Array(await this.blob.arrayBuffer());
+  async bytes(opts?: ReadOptions): Promise<Uint8Array> {
+    return new Uint8Array(await this.arrayBuffer(opts));
   }
 
   stream(): ReadableStream<Uint8Array> {
     return this.blob.stream() as ReadableStream<Uint8Array>;
   }
 
-  text(): Promise<string> {
-    return this.blob.text();
+  async text(opts?: ReadOptions): Promise<string> {
+    opts?.signal?.throwIfAborted();
+    const text = await this.blob.text();
+    opts?.signal?.throwIfAborted();
+    return text;
   }
 }
 
@@ -73,7 +85,11 @@ export class BlobFile implements CsFile {
  * the end of the file; anything else is a bug in the backend, not something
  * callers should have to tolerate.
  */
-export type RangeReader = (start: number, end: number) => Promise<Uint8Array>;
+export type RangeReader = (
+  start: number,
+  end: number,
+  signal?: AbortSignal,
+) => Promise<Uint8Array>;
 
 /** An offset as `Blob.slice` reads one: NaN is 0, a fraction truncates. */
 function toOffset(n: number): number {
@@ -129,13 +145,14 @@ export class RangeFile implements CsFile {
     return new RangeFile(this.path, this.total, this.read, this.mime, lo, hi);
   }
 
-  async bytes(): Promise<Uint8Array> {
+  async bytes(opts?: ReadOptions): Promise<Uint8Array> {
+    opts?.signal?.throwIfAborted();
     if (this.size === 0) return new Uint8Array(0);
-    return await this.read(this.start, this.end);
+    return await this.read(this.start, this.end, opts?.signal);
   }
 
-  async arrayBuffer(): Promise<ArrayBuffer> {
-    const bytes = await this.bytes();
+  async arrayBuffer(opts?: ReadOptions): Promise<ArrayBuffer> {
+    const bytes = await this.bytes(opts);
     // A fresh buffer: the view may be a window into a larger one, and handing
     // that out would expose bytes the caller did not ask for. Even a view that
     // is its whole buffer is copied, because that buffer may be one a reader
@@ -148,16 +165,20 @@ export class RangeFile implements CsFile {
     // One chunk. A backend that can stream natively should override this by
     // supplying its own `CsFile`; this is the correct-but-simple fallback.
     const self = this;
+    const cancel = new AbortController();
     return new ReadableStream<Uint8Array>({
       async pull(controller) {
-        controller.enqueue(await self.bytes());
+        controller.enqueue(await self.bytes({ signal: cancel.signal }));
         controller.close();
+      },
+      cancel(reason) {
+        cancel.abort(reason);
       },
     });
   }
 
-  async text(): Promise<string> {
-    return new TextDecoder().decode(await this.bytes());
+  async text(opts?: ReadOptions): Promise<string> {
+    return new TextDecoder().decode(await this.bytes(opts));
   }
 }
 
