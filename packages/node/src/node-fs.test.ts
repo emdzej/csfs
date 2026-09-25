@@ -85,3 +85,80 @@ describe("symlinks", () => {
     expect(await fs.directory("/link.txt")).toBeNull();
   });
 });
+
+describe("symlink loops", () => {
+  it("does not walk into a link to an ancestor", async () => {
+    const root = await mkdtemp(join(tmpdir(), "csfs-loop-"));
+    try {
+      await mkdir(join(root, "a"));
+      await writeFile(join(root, "a", "f.txt"), "x");
+      await symlink(root, join(root, "a", "up"));
+      await symlink(join(root, "a"), join(root, "a", "self"));
+      const paths: string[] = [];
+      for await (const e of walkFileSystem(nodeFileSystem(root), "/")) paths.push(e.path);
+      expect(paths).toEqual(["/a/f.txt"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("names as stored", () => {
+  it("answers a symlink with its own name, not its target's", async () => {
+    const fs = nodeFileSystem(dir);
+    expect((await fs.file("/link.txt"))!.name).toBe("link.txt");
+    expect((await fs.directory("/linkdir"))!.path).toBe("/linkdir");
+  });
+
+  it("answers with the disk's spelling on a host that folds case", async () => {
+    const root = await mkdtemp(join(tmpdir(), "csfs-case-"));
+    try {
+      await mkdir(join(root, "ECU"));
+      await writeFile(join(root, "ECU", "MS43.PRG"), "prg");
+      const fs = nodeFileSystem(root);
+      const folded = await fs.file("/ecu/ms43.prg");
+      // ext4 does not fold, and there the lookup is honestly absent.
+      if (folded === null) return;
+      expect(folded.path).toBe("/ECU/MS43.PRG");
+      expect(await fs.stat("/ecu/ms43.prg")).toEqual({
+        kind: "file",
+        name: "MS43.PRG",
+        size: 3,
+      });
+      expect((await fs.directory("/ecu"))!.path).toBe("/ECU");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("remove", () => {
+  it("removes an empty directory, and a full one only when recursive", async () => {
+    const root = await mkdtemp(join(tmpdir(), "csfs-rm-"));
+    try {
+      const fs = nodeFileSystem(root);
+      await fs.makeDirectory("/empty");
+      await fs.remove("/empty");
+      expect(await fs.directory("/empty")).toBeNull();
+      await fs.write("/full/x.txt", new Uint8Array([1]));
+      await expect(fs.remove("/full")).rejects.toThrow();
+      await fs.remove("/full", { recursive: true });
+      expect(await fs.directory("/full")).toBeNull();
+      await fs.remove("/never-was");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses the root", async () => {
+    const root = await mkdtemp(join(tmpdir(), "csfs-rm-"));
+    try {
+      await expect(nodeFileSystem(root).remove("/", { recursive: true })).rejects.toThrow(
+        /root/,
+      );
+      expect(await nodeFileSystem(root).directory("/")).not.toBeNull();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});

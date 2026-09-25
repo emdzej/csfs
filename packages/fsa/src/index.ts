@@ -18,7 +18,9 @@
  * the two situations apart instead of discovering it as a failure.
  */
 import {
+  BackendError,
   BlobFile,
+  UnsupportedOperationError,
   basename,
   joinPath,
   mimeType,
@@ -127,6 +129,26 @@ interface DirectoryHandleWithEntries extends FileSystemDirectoryHandle {
   entries(): AsyncIterableIterator<[string, FileSystemHandle]>;
 }
 
+/**
+ * Does this error mean "nothing of that kind is there"?
+ *
+ * Only those two. Everything used to be caught, so after a reload — permission
+ * back to `"prompt"`, every call rejecting with `NotAllowedError` — `file()`
+ * answered null for every path and the tree looked empty rather than locked.
+ * `null` is for absence; a caller who is refused needs to hear it, because
+ * the remedy is a button, not a different path.
+ */
+function isAbsence(e: unknown): boolean {
+  const name = (e as { name?: unknown } | null)?.name;
+  return name === "NotFoundError" || name === "TypeMismatchError";
+}
+
+/** A failure to create, with the reason the browser gave. */
+function notCreated(path: string, e: unknown): BackendError {
+  const why = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+  return new BackendError(`could not be created (${why})`, path, { cause: e });
+}
+
 export interface FsaFileSystemOptions {
   /** Match names without regard to case. Costs a listing per lookup. */
   caseInsensitive?: boolean;
@@ -148,7 +170,7 @@ interface Resolved<H> {
 }
 
 export class FsaFileSystem implements WritableFileSystem {
-  readonly kind = "fsa";
+  readonly kind: string = "fsa";
   private readonly dirs = new Map<
     string,
     Promise<Resolved<FileSystemDirectoryHandle> | null>
@@ -170,20 +192,43 @@ export class FsaFileSystem implements WritableFileSystem {
     return this.root;
   }
 
-  /** Resolve a directory, optionally creating it. Cached. */
+  /**
+   * Resolve a directory, optionally creating it. Cached.
+   *
+   * Every directory resolved on the way is cached, creating or not, and a walk
+   * starts from the deepest ancestor already known. `create` used to skip the
+   * cache entirely, so each write re-walked every segment — and on a
+   * case-insensitive tree each segment is a full listing, which made copying
+   * n files into one directory cost about n²/2 entries read.
+   */
   private dir(
     path: string,
     create = false,
   ): Promise<Resolved<FileSystemDirectoryHandle> | null> {
     const full = normalizePath(path);
-    if (!create) {
-      const hit = this.dirs.get(full);
-      if (hit) return hit;
-    }
-    const promise = (async () => {
+    const hit = this.dirs.get(full);
+    if (hit && !create) return hit;
+    const promise = (async (): Promise<Resolved<FileSystemDirectoryHandle> | null> => {
+      if (hit) {
+        const known = await hit;
+        if (known) return known;
+      }
+      const parts = segments(full);
       let current: FileSystemDirectoryHandle = this.root;
-      const found: string[] = [];
-      for (const name of segments(full)) {
+      let found: string[] = [];
+      let start = 0;
+      for (let i = parts.length - 1; i > 0; i--) {
+        const ancestor = this.dirs.get(`/${parts.slice(0, i).join("/")}`);
+        const known = ancestor ? await ancestor : null;
+        if (known) {
+          current = known.handle;
+          found = segments(known.path);
+          start = i;
+          break;
+        }
+      }
+      for (let i = start; i < parts.length; i++) {
+        const name = parts[i]!;
         /*
          * `findChild` returns null for a directory that is not there yet, and
          * when creating that is the normal case rather than a failure — so it
@@ -201,26 +246,39 @@ export class FsaFileSystem implements WritableFileSystem {
         if (resolved === null) return null;
         try {
           current = await current.getDirectoryHandle(resolved, { create });
-        } catch {
-          return null;
+        } catch (e) {
+          // Creating, a clash with a file of that name is a failure to say
+          // out loud, not an absence.
+          if (isAbsence(e) && !create) return null;
+          if (create) throw notCreated(`/${[...found, resolved].join("/")}`, e);
+          throw e;
         }
         found.push(resolved);
+        const prefix = `/${parts.slice(0, i + 1).join("/")}`;
+        if (i < parts.length - 1 && !this.dirs.has(prefix)) {
+          this.dirs.set(
+            prefix,
+            Promise.resolve({ handle: current, path: `/${found.join("/")}` }),
+          );
+        }
       }
       return { handle: current, path: `/${found.join("/")}` };
     })();
     // Cached before it settles, so concurrent lookups share one walk rather
     // than racing to create the same directories.
-    if (!create) {
-      this.dirs.set(full, promise);
-      // A *miss* is dropped once it settles. `makeDirectory` or `write` can
-      // make one wrong, and a cached null then outlives the thing that fixed
-      // it — `directory(p)` kept answering null after `makeDirectory(p)` had
-      // succeeded. Caching it during the in-flight window is still worth it,
-      // since that is what makes concurrent lookups share one walk.
-      void promise.then((r) => {
-        if (r === null && this.dirs.get(full) === promise) this.dirs.delete(full);
-      });
-    }
+    this.dirs.set(full, promise);
+    // A *miss* or a failure is dropped once it settles. `makeDirectory` or
+    // `write` can make one wrong, and a cached null then outlives the thing
+    // that fixed it — `directory(p)` kept answering null after
+    // `makeDirectory(p)` had succeeded. Caching it during the in-flight window
+    // is still worth it, since that is what makes concurrent lookups share one
+    // walk.
+    const drop = (): void => {
+      if (this.dirs.get(full) === promise) this.dirs.delete(full);
+    };
+    promise.then((r) => {
+      if (r === null) drop();
+    }, drop);
     return promise;
   }
 
@@ -247,12 +305,32 @@ export class FsaFileSystem implements WritableFileSystem {
     dir: FileSystemDirectoryHandle,
     name: string,
     kind: "file" | "directory",
-  ): Promise<string | null> {
+  ): Promise<string | null>;
+  /** Find a child of either kind, ignoring case. */
+  private async findChild(
+    dir: FileSystemDirectoryHandle,
+    name: string,
+  ): Promise<{ name: string; kind: "file" | "directory" } | null>;
+  private async findChild(
+    dir: FileSystemDirectoryHandle,
+    name: string,
+    kind?: "file" | "directory",
+  ): Promise<string | { name: string; kind: "file" | "directory" } | null> {
     const target = name.toLowerCase();
+    let folded: { name: string; kind: "file" | "directory" } | null = null;
     for await (const [entryName, handle] of (dir as DirectoryHandleWithEntries).entries()) {
-      if (handle.kind === kind && entryName.toLowerCase() === target) return entryName;
+      if (kind !== undefined && handle.kind !== kind) continue;
+      if (entryName.toLowerCase() !== target) continue;
+      // An exact spelling beats the fold, as it does on `http` and `zip`: two
+      // names differing only in case are both reachable to a caller who
+      // spells one exactly.
+      if (entryName === name) {
+        return kind === undefined ? { name: entryName, kind: handle.kind } : entryName;
+      }
+      folded ??= { name: entryName, kind: handle.kind };
     }
-    return null;
+    if (!folded) return null;
+    return kind === undefined ? folded : folded.name;
   }
 
   private async fileHandle(
@@ -271,8 +349,10 @@ export class FsaFileSystem implements WritableFileSystem {
     try {
       const handle = await parent.handle.getFileHandle(resolved, { create });
       return { handle, path: joinPath(parent.path, resolved) };
-    } catch {
-      return null;
+    } catch (e) {
+      if (create) throw notCreated(joinPath(parent.path, resolved), e);
+      if (isAbsence(e)) return null;
+      throw e;
     }
   }
 
@@ -286,8 +366,10 @@ export class FsaFileSystem implements WritableFileSystem {
       // `found.path`, not the argument: the name a caller gets back is the one
       // the directory stores.
       return new BlobFile(found.path, file, mimeType(found.path));
-    } catch {
-      return null;
+    } catch (e) {
+      // Removed between the lookup and the read.
+      if (isAbsence(e)) return null;
+      throw e;
     }
   }
 
@@ -302,22 +384,43 @@ export class FsaFileSystem implements WritableFileSystem {
 
   async stat(path: string): Promise<CsStat | null> {
     const full = normalizePath(path);
-    if (segments(full).length === 0)
-      return { kind: "directory", name: this.root.name, size: 0 };
-    const file = await this.file(full);
-    if (file) return { kind: "file", name: file.name, size: file.size };
-    const dir = await this.dir(full);
+    // `""`, as every other backend names its root. The picked directory's own
+    // name is `name`, for a consumer that wants to show it.
+    if (segments(full).length === 0) return { kind: "directory", name: "", size: 0 };
+    const name = basename(full);
+    const parent = await this.dir(full.slice(0, full.length - name.length));
+    if (!parent) return null;
+    // One listing for either kind, where `file()` then `dir()` read the parent
+    // twice for every directory on a case-insensitive tree.
+    const child = this.opts.caseInsensitive
+      ? await this.findChild(parent.handle, name)
+      : { name, kind: undefined };
+    if (!child) return null;
+    if (child.kind !== "directory") {
+      try {
+        const handle = await parent.handle.getFileHandle(child.name);
+        const file = await handle.getFile();
+        return { kind: "file", name: child.name, size: file.size };
+      } catch (e) {
+        if (!isAbsence(e)) throw e;
+        if (child.kind === "file") return null;
+      }
+    }
+    const dir = await this.dir(joinPath(parent.path, child.name));
     return dir ? { kind: "directory", name: basename(dir.path), size: 0 } : null;
   }
 
   async write(path: string, data: Uint8Array | ReadableStream<Uint8Array>): Promise<void> {
     const found = await this.fileHandle(path, true);
-    if (!found) throw new Error(`${path}: could not be created`);
+    // Not reached for a failure the browser explained — that is thrown with
+    // its reason — only for a path with no name to create.
+    if (!found) throw new BackendError("could not be created (not a file path)", path);
     const handle = found.handle;
     // `createWritable` stages into a temporary file and swaps on close, so a
     // crash mid-write leaves the previous content rather than a truncated
-    // file. The cost is that write traffic roughly doubles; OPFS has
-    // `createSyncAccessHandle` to avoid that, and this API does not.
+    // file. The cost is that write traffic roughly doubles. OPFS has
+    // `createSyncAccessHandle` to avoid that, inside a worker only, and this
+    // backend does not use it.
     const writable = await handle.createWritable();
     if (data instanceof Uint8Array) {
       // A `Uint8Array` is a valid write chunk; the DOM lib's
@@ -334,16 +437,18 @@ export class FsaFileSystem implements WritableFileSystem {
   }
 
   async makeDirectory(path: string): Promise<void> {
-    if (!(await this.dir(path, true))) throw new Error(`${path}: could not be created`);
+    if (!(await this.dir(path, true))) throw new BackendError("could not be created", path);
   }
 
   async remove(path: string, opts: { recursive?: boolean } = {}): Promise<void> {
     const full = normalizePath(path);
     const name = basename(full);
     // The root has no parent to be removed from, and `removeEntry("")` throws
-    // something unhelpful rather than saying so.
-    if (name === "") return;
+    // something unhelpful rather than saying so. Refused rather than ignored,
+    // as on every backend: `node` used to delete the root itself.
+    if (name === "") throw new UnsupportedOperationError("remove the root", this.kind);
     const parent = await this.dir(full.slice(0, full.length - name.length));
+    // Absent already, which is what was asked for.
     if (!parent) return;
     // `removeEntry` takes a literal name, so a case-insensitive filesystem has
     // to resolve it first — otherwise `remove("/ecu/ms43.prg")` silently fails
@@ -355,11 +460,15 @@ export class FsaFileSystem implements WritableFileSystem {
         (await this.findChild(parent.handle, name, "directory")) ??
         name)
       : name;
-    await (
-      parent.handle as FileSystemDirectoryHandle & {
-        removeEntry(name: string, o?: { recursive?: boolean }): Promise<void>;
-      }
-    ).removeEntry(resolved, { recursive: opts.recursive ?? false });
+    try {
+      await (
+        parent.handle as FileSystemDirectoryHandle & {
+          removeEntry(name: string, o?: { recursive?: boolean }): Promise<void>;
+        }
+      ).removeEntry(resolved, { recursive: opts.recursive ?? false });
+    } catch (e) {
+      if ((e as { name?: unknown } | null)?.name !== "NotFoundError") throw e;
+    }
     this.forget(full);
   }
 }
@@ -383,7 +492,7 @@ class FsaDirectory implements CsDirectory {
       } else {
         // `getFile()` per entry would be a round trip each, and a listing of
         // 24,000 files does not need sizes. `0` here means "ask the file", and
-        // `walk` does exactly that when a size is wanted.
+        // `buildManifest` does exactly that when a size is wanted.
         out.push({ kind: "file", name, size: 0 });
       }
     }

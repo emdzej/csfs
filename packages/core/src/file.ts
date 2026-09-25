@@ -75,6 +75,11 @@ export class BlobFile implements CsFile {
  */
 export type RangeReader = (start: number, end: number) => Promise<Uint8Array>;
 
+/** An offset as `Blob.slice` reads one: NaN is 0, a fraction truncates. */
+function toOffset(n: number): number {
+  return Number.isNaN(n) ? 0 : Math.trunc(n);
+}
+
 /**
  * A `CsFile` over a range reader — the HTTP case.
  *
@@ -111,7 +116,11 @@ export class RangeFile implements CsFile {
   slice(start = 0, end = this.size): CsFile {
     // Clamp like `Blob.slice`: negative offsets count from the end, and
     // over-long ranges truncate. A zip reader asking for the last 64 KB of a
-    // 20 KB file must get 20 KB rather than an error.
+    // 20 KB file must get 20 KB rather than an error. Offsets are made whole
+    // first, as a `Blob` makes them: NaN let through made the size NaN, and a
+    // fraction reached the reader as a `Range` header no host accepts.
+    start = toOffset(start);
+    end = toOffset(end);
     const size = this.size;
     const from = start < 0 ? Math.max(0, size + start) : Math.min(start, size);
     const to = end < 0 ? Math.max(0, size + end) : Math.min(end, size);
@@ -128,7 +137,10 @@ export class RangeFile implements CsFile {
   async arrayBuffer(): Promise<ArrayBuffer> {
     const bytes = await this.bytes();
     // A fresh buffer: the view may be a window into a larger one, and handing
-    // that out would expose bytes the caller did not ask for.
+    // that out would expose bytes the caller did not ask for. Even a view that
+    // is its whole buffer is copied, because that buffer may be one a reader
+    // keeps — `bytesFile`'s, or a cached body — and a caller writing into what
+    // `Blob.arrayBuffer` promises is theirs would change later reads.
     return bytes.slice().buffer as ArrayBuffer;
   }
 

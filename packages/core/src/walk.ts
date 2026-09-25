@@ -6,7 +6,7 @@
  * against the interface, so a backend supplies only `entries`, `file` and
  * `directory` on a single directory.
  */
-import { basename, dirname, segments } from "./path.js";
+import { basename, dirname, normalizePath, segments } from "./path.js";
 import type { CsDirectory, CsEntry, CsFile, CsFileSystem, CsStat } from "./types.js";
 
 /** Walk down from a directory to the one at `path`. `null` if absent. */
@@ -113,5 +113,8 @@ export async function* walkFileSystem(
 ): AsyncGenerator<WalkEntry> {
   const dir = await fs.directory(path);
   if (!dir) return;
-  yield* walk(dir, opts, path === "/" ? "" : path.replace(/\/$/, ""));
+  // Normalised, so `"a/b"` yields `/a/b/...` as `WalkEntry.path` promises
+  // rather than `a/b/...`.
+  const root = normalizePath(path);
+  yield* walk(dir, opts, root === "/" ? "" : root);
 }

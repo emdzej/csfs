@@ -21,8 +21,9 @@ export class BackendError extends Error {
   constructor(
     message: string,
     readonly path?: string,
+    options?: ErrorOptions,
   ) {
-    super(path ? `${path}: ${message}` : message);
+    super(path ? `${path}: ${message}` : message, options);
     this.name = "BackendError";
   }
 }

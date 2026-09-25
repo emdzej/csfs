@@ -46,7 +46,14 @@ untrusted input stays inside the tree.
 
 ## Notes
 
-- Node 18+, ESM only.
+- Node 22+, ESM only — the versions CI runs. `fs.openAsBlob`, which makes a
+  file sliceable without reading it, needs 19.8 at the least.
+- No case folding of its own: the host filesystem has decided (APFS and NTFS
+  fold, ext4 does not). On a folding host a lookup still answers with the name
+  on disk, so `file("/ecu/ms43.prg").name` is `MS43.PRG` if that is what is
+  stored.
+- A symlink to a directory is listed and walked as one, except a link back to
+  itself or an ancestor, which would loop.
 - `stat` reports `kind`, `name`, and `size` — the intersection all backends can
   honour. For anything more, use `node:fs` directly; this is not a replacement
   for it.

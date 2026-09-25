@@ -15,7 +15,9 @@
  *   case-insensitive resolution layer above it.
  * - **`getDirectoryHandle` without `create` rejects** with `NotFoundError`
  *   rather than returning null, which is what the spec says and what the
- *   `try`/`catch` in the resolver is written against.
+ *   `try`/`catch` in the resolver is written against. Asking for a file by a
+ *   directory's name, or the reverse, rejects with `TypeMismatchError`, as a
+ *   browser does — the resolver tells those apart from a refusal.
  */
 
 type Entry = FakeDirectory | FakeFile;
@@ -95,7 +97,7 @@ class FakeDirectory {
   async getDirectoryHandle(name: string, opts?: { create?: boolean }): Promise<FakeDirectory> {
     const found = this.children.get(name);
     if (found?.kind === "directory") return found;
-    if (found) throw notFound(name, "a file is there");
+    if (found) throw mismatch(name, "a file is there");
     if (!opts?.create) throw notFound(name);
     const made = new FakeDirectory(name);
     this.children.set(name, made);
@@ -105,7 +107,7 @@ class FakeDirectory {
   async getFileHandle(name: string, opts?: { create?: boolean }): Promise<FakeFile> {
     const found = this.children.get(name);
     if (found?.kind === "file") return found;
-    if (found) throw notFound(name, "a directory is there");
+    if (found) throw mismatch(name, "a directory is there");
     if (!opts?.create) throw notFound(name);
     const made = new FakeFile(name);
     this.children.set(name, made);
@@ -141,6 +143,10 @@ class FakeDirectory {
 
 const notFound = (name: string, why = "no such entry") =>
   new DOMException(`${name}: ${why}`, "NotFoundError");
+
+/** What a browser throws for the right name and the wrong kind. */
+const mismatch = (name: string, why: string) =>
+  new DOMException(`${name}: ${why}`, "TypeMismatchError");
 
 /** A fake root, typed as the handle the filesystem takes. */
 export function fakeDirectory(name = "root"): FileSystemDirectoryHandle & {

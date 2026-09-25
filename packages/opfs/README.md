@@ -62,9 +62,10 @@ import.
 
 OPFS _is_ the File System Access API, pointed at a browser-managed root, so this
 package is a thin wrapper: `opfsFileSystem` resolves the root, applies the
-namespace, and returns the same `FsaFileSystem` (re-exported here as
-`OpfsFileSystem`). The extras — `persist`, `quota`, `clearNamespace` — are the
-parts that have no analogue for a picked directory.
+namespace, and returns an `OpfsFileSystem` — an `FsaFileSystem` whose `kind` is
+`"opfs"`. A namespace may nest (`"app/cache"`). The extras — `persist`, `quota`,
+`clearNamespace` — are the parts that have no analogue for a picked directory;
+`clearNamespace` refuses an empty name, which would be the whole origin.
 
 ## Licence
 

@@ -14,10 +14,33 @@
  * - **It is evictable.** A browser may clear it under storage pressure unless
  *   `navigator.storage.persist()` has been granted, which is why `persist()`
  *   is offered here and why a consumer should call it before writing gigabytes.
- * - **`createSyncAccessHandle` writes in place**, so OPFS avoids the doubled
- *   write traffic `createWritable` costs — but only inside a worker.
+ * - **`createSyncAccessHandle` could write in place**, avoiding the doubled
+ *   write traffic `createWritable` costs — but only inside a worker, and this
+ *   backend does not use it. Writes here stage and swap, as on a picked
+ *   directory.
  */
 import { FsaFileSystem, type FsaFileSystemOptions } from "@emdzej/csfs-fsa";
+
+type Removable = FileSystemDirectoryHandle & {
+  removeEntry(name: string, o?: { recursive?: boolean }): Promise<void>;
+};
+
+/**
+ * The FSA backend over OPFS, reporting itself as such.
+ *
+ * A subclass only for `kind`: it was `"fsa"`, although `"opfs"` is one of the
+ * kinds the interface names, so a wrapped one read `fsa+zip` in diagnostics.
+ */
+export class OpfsFileSystem extends FsaFileSystem {
+  override readonly kind: string = "opfs";
+}
+
+/** A namespace's segments. `"a/b"` nests, rather than reaching the API as a name. */
+function namespaceParts(namespace: string): string[] {
+  const parts = namespace.split("/").filter((p) => p !== "" && p !== ".");
+  if (parts.includes("..")) throw new Error(`namespace ${namespace} may not contain ..`);
+  return parts;
+}
 
 /** Is OPFS available? */
 export function isOpfsSupported(): boolean {
@@ -37,14 +60,16 @@ export interface OpfsFileSystemOptions extends FsaFileSystemOptions {
 }
 
 /** Open OPFS, optionally rooted at a namespace. */
-export async function opfsFileSystem(opts: OpfsFileSystemOptions = {}): Promise<FsaFileSystem> {
+export async function opfsFileSystem(
+  opts: OpfsFileSystemOptions = {},
+): Promise<OpfsFileSystem> {
   if (!isOpfsSupported()) throw new Error("this browser has no origin private file system");
   let root = await navigator.storage.getDirectory();
-  if (opts.namespace) {
-    root = await root.getDirectoryHandle(opts.namespace, { create: true });
+  for (const part of namespaceParts(opts.namespace ?? "")) {
+    root = await root.getDirectoryHandle(part, { create: true });
   }
   const { caseInsensitive } = opts;
-  return new FsaFileSystem(root, caseInsensitive === undefined ? {} : { caseInsensitive });
+  return new OpfsFileSystem(root, caseInsensitive === undefined ? {} : { caseInsensitive });
 }
 
 /**
@@ -76,14 +101,22 @@ export async function quota(): Promise<{ usage?: number; quota?: number }> {
   }
 }
 
-/** Delete everything in a namespace. */
+/**
+ * Delete everything in a namespace. Succeeds if there is nothing to delete.
+ *
+ * Refuses an empty namespace: that is the whole origin's storage, and every
+ * other consumer's files with it.
+ */
 export async function clearNamespace(namespace: string): Promise<void> {
-  const root = await navigator.storage.getDirectory();
-  await (
-    root as FileSystemDirectoryHandle & {
-      removeEntry(name: string, o?: { recursive?: boolean }): Promise<void>;
-    }
-  ).removeEntry(namespace, { recursive: true });
+  const parts = namespaceParts(namespace);
+  const last = parts.pop();
+  if (last === undefined)
+    throw new Error("refusing to clear the whole origin: name a namespace");
+  try {
+    let parent = await navigator.storage.getDirectory();
+    for (const part of parts) parent = await parent.getDirectoryHandle(part);
+    await (parent as Removable).removeEntry(last, { recursive: true });
+  } catch (e) {
+    if ((e as { name?: unknown } | null)?.name !== "NotFoundError") throw e;
+  }
 }
-
-export { FsaFileSystem as OpfsFileSystem };

@@ -165,3 +165,115 @@ describe("case-sensitive", () => {
     expect(await root.paths()).toEqual(["ILLUST/a.tif", "Illust/a.tif"]);
   });
 });
+
+describe("errors that are not absence", () => {
+  const refused = () => new DOMException("permission is prompt", "NotAllowedError");
+
+  it("says a tree is locked rather than that it is empty", async () => {
+    const root = fakeDirectory();
+    const fs = fsaFileSystem(root);
+    await fs.write("/a/b.txt", bytes("x"));
+    // What every call does after a reload, until `requestPermission` succeeds.
+    const locked = fsaFileSystem(
+      Object.assign(root, {
+        getDirectoryHandle: async () => {
+          throw refused();
+        },
+        getFileHandle: async () => {
+          throw refused();
+        },
+      }),
+    );
+    await expect(locked.file("/a/b.txt")).rejects.toThrow(/permission/);
+    await expect(locked.directory("/a")).rejects.toThrow(/permission/);
+  });
+
+  it("says why a write failed", async () => {
+    const root = fakeDirectory();
+    const fs = fsaFileSystem(root);
+    await fs.makeDirectory("/taken");
+    // A directory already has the name.
+    const err = await fs.write("/taken", bytes("x")).catch((e: unknown) => e);
+    expect(String(err)).toMatch(/TypeMismatchError/);
+    expect((err as Error).cause).toBeInstanceOf(DOMException);
+  });
+
+  it("still answers null for a file asked for as a directory, and the reverse", async () => {
+    const fs = fsaFileSystem(fakeDirectory());
+    await fs.write("/f.txt", bytes("x"));
+    await fs.makeDirectory("/d");
+    expect(await fs.directory("/f.txt")).toBeNull();
+    expect(await fs.file("/d")).toBeNull();
+  });
+});
+
+describe("remove", () => {
+  it("refuses the root", async () => {
+    const fs = fsaFileSystem(fakeDirectory());
+    await expect(fs.remove("/", { recursive: true })).rejects.toThrow(/root/);
+  });
+
+  it("succeeds for something already absent", async () => {
+    const fs = fsaFileSystem(fakeDirectory());
+    await fs.remove("/nothing");
+    await fs.remove("/no/parent/either");
+  });
+
+  it("removes an empty directory, and refuses a full one unless recursive", async () => {
+    const fs = fsaFileSystem(fakeDirectory());
+    await fs.makeDirectory("/empty");
+    await fs.remove("/empty");
+    expect(await fs.directory("/empty")).toBeNull();
+    await fs.write("/full/x", bytes("x"));
+    await expect(fs.remove("/full")).rejects.toThrow();
+    await fs.remove("/full", { recursive: true });
+    expect(await fs.directory("/full")).toBeNull();
+  });
+});
+
+describe("cost", () => {
+  it("lists a directory once per write, not once per segment per write", async () => {
+    const root = fakeDirectory();
+    let listings = 0;
+    const count = (dir: FileSystemDirectoryHandle): FileSystemDirectoryHandle => {
+      const d = dir as FileSystemDirectoryHandle & {
+        entries(): AsyncIterableIterator<[string, FileSystemHandle]>;
+      };
+      const entries = d.entries.bind(d);
+      const get = d.getDirectoryHandle.bind(d);
+      return Object.assign(d, {
+        entries: () => {
+          listings += 1;
+          return entries();
+        },
+        getDirectoryHandle: async (n: string, o?: FileSystemGetDirectoryOptions) =>
+          count(await get(n, o)),
+      });
+    };
+    const fs = fsaFileSystem(count(root), { caseInsensitive: true });
+    await fs.write("/a/b/c/0.bin", bytes("x"));
+    listings = 0;
+    for (let i = 1; i <= 10; i++) await fs.write(`/a/b/c/${i}.bin`, bytes("x"));
+    // One listing per write, of `c`, to find the file's stored name.
+    expect(listings).toBe(10);
+  });
+
+  it("stats a directory with one listing of its parent", async () => {
+    const fs = fsaFileSystem(fakeDirectory(), { caseInsensitive: true });
+    await fs.makeDirectory("/Ecu");
+    expect(await fs.stat("/ECU")).toEqual({ kind: "directory", name: "Ecu", size: 0 });
+    expect(await fs.stat("/")).toEqual({ kind: "directory", name: "", size: 0 });
+  });
+
+  it("prefers an exact spelling over a fold", async () => {
+    const fs = fsaFileSystem(fakeDirectory(), { caseInsensitive: true });
+    await fs.write("/x/A.BIN", bytes("upper"));
+    // Written case-sensitively beside it, as another tool might.
+    await fsaFileSystem((fs as unknown as { handle: FileSystemDirectoryHandle }).handle).write(
+      "/x/a.bin",
+      bytes("lower"),
+    );
+    expect(await text(await fs.file("/x/a.bin"))).toBe("lower");
+    expect(await text(await fs.file("/x/A.BIN"))).toBe("upper");
+  });
+});

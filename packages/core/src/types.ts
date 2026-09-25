@@ -14,7 +14,7 @@
  * `File` already satisfy this shape, the local backends need no adapter at all.
  *
  * **Reads only.** Writing is a separate, optional interface
- * (`WritableFileSystem`), because two of the three backends cannot write and a
+ * (`WritableFileSystem`), because `http` and archives cannot write and a
  * combined interface would make every consumer check capabilities it does not
  * use. A read-only filesystem is the common case and should be the plain one.
  */
@@ -26,7 +26,11 @@ export interface CsFile {
   /** Basename, in the case the backing store reports. */
   readonly name: string;
   readonly size: number;
-  /** MIME type when the backend knows one; `""` when it does not. */
+  /**
+   * MIME type. The backends derive it from the extension with `mimeType`, so
+   * an unknown one is `"application/octet-stream"`; `""` only from a `Blob`
+   * that carried none.
+   */
   readonly type: string;
 
   /**
@@ -133,12 +137,22 @@ export interface WritableFileSystem extends CsFileSystem {
   write(path: string, data: Uint8Array | ReadableStream<Uint8Array>): Promise<void>;
   /** Create a directory and its parents. Succeeds if it exists. */
   makeDirectory(path: string): Promise<void>;
-  /** Remove a file or an empty directory. `recursive` removes a tree. */
+  /**
+   * Remove a file or an empty directory. `recursive` removes a tree.
+   *
+   * Succeeds if the path is already absent, as `makeDirectory` succeeds if it
+   * exists. The root cannot be removed, and asking throws
+   * `UnsupportedOperationError`.
+   */
   remove(path: string, opts?: { recursive?: boolean }): Promise<void>;
 }
 
 /** True when a filesystem can be written to. */
 export function isWritable(fs: CsFileSystem): fs is WritableFileSystem {
   const candidate = fs as Partial<WritableFileSystem>;
-  return typeof candidate.write === "function" && typeof candidate.makeDirectory === "function";
+  return (
+    typeof candidate.write === "function" &&
+    typeof candidate.makeDirectory === "function" &&
+    typeof candidate.remove === "function"
+  );
 }

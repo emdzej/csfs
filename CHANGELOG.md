@@ -58,8 +58,46 @@ bump is where features land.
 - **The same archive mounted twice** — flat at one path, relative at another —
   was listed using whichever mount came first.
 
+- **`csfs-node` could not remove an empty directory, and could remove the
+  root.** `rm` without `recursive` refuses every directory (`ERR_FS_EISDIR`),
+  so the interface's "or an empty directory" failed here while it worked on
+  `fsa`; and `remove("/", { recursive: true })` deleted the root itself. Both
+  backends now remove an empty directory, refuse the root with
+  `UnsupportedOperationError`, and succeed for a path already absent — which
+  `node` did and `fsa` did not.
+- **`csfs-node` echoed the caller's spelling on a case-folding host.** On APFS
+  or NTFS, `file("/ecu/ms43.prg").name` was `ms43.prg` when the disk holds
+  `MS43.PRG`. It now answers with the name on disk, for one `realpath` when the
+  spelling already matches. Still no folding layer of its own.
+- **A symlink loop made a `node` walk recurse until the path was too long**,
+  and `buildManifest` recorded every copy. A link to its own directory or an
+  ancestor is left out of the listing.
+- **`csfs-fsa` reported a lost permission as absence.** Every error was caught,
+  so after a reload — every call rejecting with `NotAllowedError` — the tree
+  looked empty rather than locked. Only `NotFoundError` and `TypeMismatchError`
+  mean null now; a failed write says why (`TypeMismatchError`, quota,
+  read-only) instead of a bare "could not be created".
+- **`RangeFile.slice` let NaN and fractions through**, making `size` NaN or
+  putting a fractional `Range` header on the wire. Offsets are made whole as
+  `Blob.slice` makes them.
+- `walkFileSystem(fs, "a/b")` yielded paths without their leading slash;
+  `node` listed an unreadable directory as empty where `fsa` threw, and called
+  a socket a file in `stat` while `file()` would not open it; `stat("/").name`
+  is `""` on every backend; `isWritable` checks `remove` too.
+
 ### Changed
 
+- **`opfsFileSystem` returns an `OpfsFileSystem` whose `kind` is `"opfs"`**, a
+  subclass of `FsaFileSystem`, rather than an `FsaFileSystem` reporting
+  `"fsa"`. A namespace may nest, and `clearNamespace` succeeds on a namespace
+  that does not exist and refuses an empty one — the whole origin.
+- **Case-insensitive `fsa` and `opfs` writes cache the directories they
+  resolve**, and start from the deepest known ancestor. `create` bypassed the
+  cache, so each write re-listed every segment: measured on the fake, ten
+  writes into `/a/b/c` now cost ten listings where they cost forty, and the
+  cost no longer grows with depth. `stat` lists a parent once, not twice.
+- **`node` stats a listing's entries concurrently**, 64 at a time, rather than
+  one after another.
 - **`stat` through a mount reads the central directory, not the entry.** It
   went through `file()`, so asking the size of a 100 MB entry inflated it.
 - **An entry is inflated straight into a buffer of its declared size**, instead
