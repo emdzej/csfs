@@ -34,7 +34,13 @@ await fs.read("/outer.zip#/inner.zip#/deep.txt");
 Paths without a `#` are passed straight through, so wrapping a file system costs
 nothing until someone uses the syntax. Archives are opened once and cached —
 the expensive part is the central directory, not the reads — and cached as the
-_promise_, so two concurrent lookups share one read of it.
+_promise_, so two concurrent lookups share one read of it. Only a success is
+kept, so an archive that failed to open over a dropped connection is tried again
+next time.
+
+What comes back carries the full path — `file("/pack.zip#/inside.txt").path` is
+`/pack.zip#/inside.txt`, with each name as the archive stores it — so it can be
+logged, cached by, or opened again.
 
 ## Transparent mounts
 
@@ -62,6 +68,12 @@ anything.
 
 **A real file always wins**, so a tree that _was_ extracted keeps working, and a
 half-extracted one falls back file by file rather than failing.
+
+A mount's `serves` directory exists, and so do its parents: a mount at `/a/b`
+makes `/` list `a` and `/a` list `b` on any backend, not only on one whose
+manifest derives them. `serves: "/"` mounts an archive over the whole tree.
+With `caseInsensitive`, matching a path against `serves` folds too, and a file
+answers with the path the archive stores.
 
 ## Zip handling is not ours
 

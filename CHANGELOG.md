@@ -34,8 +34,36 @@ bump is where features land.
 - `caseCollisions` is empty on a case-sensitive index, as documented; an empty
   manifest has a root.
 
+- **A file read through an archive did not say where it was.** `CsFile.path` is
+  documented as the full path, fragment included, but `withArchives` answered
+  `file("/d.zip#/sub/y.txt")` with `/sub/y.txt`, and a transparent mount at
+  `/a/b` answered `/a/b/sub/y.txt` with `/sub/y.txt`. Both now report the path
+  in the surrounding tree, with names as stored.
+- **A mount at `serves: "/"` never answered.** The prefix test became
+  `startsWith("//")`. Mounts are now matched segment by segment.
+- **A mount's parents did not exist.** With a mount at `/a/b` on `node`, `fsa`
+  or `opfs`, `/a/b/x` was readable while `directory("/a")` was null and `/` did
+  not list `a` — the manifest's old mistake, repeated in the wrapper and hidden
+  on `http` because its manifest derives parents. A flat mount's own directory
+  was null too.
+- **A failed archive open was cached forever, and every failure was reported as
+  a corrupt archive.** One transient read error made the archive unreadable for
+  the object's lifetime, and `NotDataError` and `RangeUnsupportedError` were
+  wrapped into a plain `BackendError`. Failures are dropped from the cache and a
+  store's own errors pass through with their type.
+- **Mounts ignored `caseInsensitive` when matching `serves`**, and `stat`
+  echoed the caller's spelling — the bug 0.2.0 fixed in the backends. A merged
+  listing now also counts `Foo.png` on disk and `foo.png` archived as one entry
+  when folding.
+- **The same archive mounted twice** — flat at one path, relative at another —
+  was listed using whichever mount came first.
+
 ### Changed
 
+- **`stat` through a mount reads the central directory, not the entry.** It
+  went through `file()`, so asking the size of a 100 MB entry inflated it.
+- **An entry is inflated straight into a buffer of its declared size**, instead
+  of collecting chunks and copying them, which held every byte twice.
 - **Without `Range`, `csfs-http` keeps several bodies, and shares downloads.**
   `wholeFileCacheBytes` is now a budget over the most recently used bodies
   rather than one slot, because several archives serving one directory evicted

@@ -1,9 +1,17 @@
 import { openAsBlob } from "node:fs";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, beforeAll, afterAll } from "vitest";
-import { BlobFile, type BlobLike } from "@emdzej/csfs-core";
+import {
+  BackendError,
+  BlobFile,
+  NotDataError,
+  RangeFile,
+  type BlobLike,
+  type CsFile,
+  type CsFileSystem,
+} from "@emdzej/csfs-core";
 import { ZipWriter, BlobWriter, TextReader, Uint8ArrayReader } from "@zip.js/zip.js";
 import { zipFileSystem } from "./zip-fs.js";
 import { withArchives, withTransparentArchives } from "./archives.js";
@@ -149,6 +157,20 @@ describe("# addressing", () => {
     ]);
   });
 
+  it("answers with the full path, archive and all", async () => {
+    const fs = withArchives(nodeFileSystem(dir));
+    const file = await fs.file("/outer.zip#/inner.zip#/deep/file.txt");
+    expect(file!.path).toBe("/outer.zip#/inner.zip#/deep/file.txt");
+    expect(file!.name).toBe("file.txt");
+    expect(file!.slice(0, 4).path).toBe(file!.path);
+    const inside = await fs.directory("/outer.zip#/");
+    expect(inside!.path).toBe("/outer.zip#/");
+    expect((await inside!.file("plain.txt"))!.path).toBe("/outer.zip#/plain.txt");
+    expect((await fs.directory("/outer.zip#/inner.zip#/deep"))!.path).toBe(
+      "/outer.zip#/inner.zip#/deep",
+    );
+  });
+
   it("resolves .. without escaping the archive", async () => {
     // Paths arrive from manifests and URLs, so this is untrusted input.
     const fs = withArchives(nodeFileSystem(dir));
@@ -213,6 +235,181 @@ describe("mounted archives", () => {
     ]);
     const st = await fs.stat("/drawings/1132/1132C000.png");
     expect(st).toEqual({ kind: "file", name: "1132C000.png", size: 9 });
+  });
+});
+
+describe("mounted archives, beyond the happy path", () => {
+  let dir: string;
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), "csfs-mount2-"));
+    await writeFile(
+      join(dir, "tree.zip"),
+      await makeZip([
+        { name: "Sub/Y.txt", text: "inside" },
+        { name: "Foo.png", text: "archived" },
+      ]),
+    );
+    await writeFile(join(dir, "foo.png"), "real");
+  });
+  afterAll(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  const text = async (fs: CsFileSystem, path: string) =>
+    (await fs.file(path).then((f) => f?.text())) ?? null;
+
+  it("answers for the root when mounted at it", async () => {
+    const fs = withTransparentArchives(nodeFileSystem(dir), [
+      { archive: "/tree.zip", serves: "/" },
+    ]);
+    expect(await text(fs, "/Sub/Y.txt")).toBe("inside");
+    expect((await fs.file("/Sub/Y.txt"))!.path).toBe("/Sub/Y.txt");
+  });
+
+  it("makes a mount's parents exist and list it", async () => {
+    const fs = withTransparentArchives(nodeFileSystem(dir), [
+      { archive: "/tree.zip", serves: "/a/b" },
+    ]);
+    expect(await text(fs, "/a/b/Sub/Y.txt")).toBe("inside");
+    expect(await fs.directory("/a")).not.toBeNull();
+    const root = await fs.directory("/");
+    expect((await root!.entries()).find((e) => e.name === "a")).toEqual({
+      kind: "directory",
+      name: "a",
+    });
+    expect((await (await fs.directory("/a"))!.entries()).map((e) => e.name)).toEqual(["b"]);
+    expect(await fs.stat("/a")).toEqual({ kind: "directory", name: "a", size: 0 });
+  });
+
+  it("makes a flat mount's directory exist", async () => {
+    const fs = withTransparentArchives(nodeFileSystem(dir), [
+      { archive: "/tree.zip", serves: "/flat", entry: "basename" },
+    ]);
+    expect(await fs.directory("/flat")).not.toBeNull();
+  });
+
+  it("reports where a mounted file is, as the archive stores it", async () => {
+    const fs = withTransparentArchives(
+      nodeFileSystem(dir),
+      [{ archive: "/tree.zip", serves: "/Mnt" }],
+      { caseInsensitive: true },
+    );
+    const file = await fs.file("/mnt/sub/y.txt");
+    expect(file!.path).toBe("/Mnt/Sub/Y.txt");
+    expect(await fs.stat("/mnt/sub/y.txt")).toEqual({ kind: "file", name: "Y.txt", size: 6 });
+    expect((await fs.directory("/mnt/sub"))!.path).toBe("/Mnt/Sub");
+  });
+
+  it("stays exact about serves when not folding", async () => {
+    const fs = withTransparentArchives(nodeFileSystem(dir), [
+      { archive: "/tree.zip", serves: "/Mnt" },
+    ]);
+    expect(await fs.file("/mnt/Sub/Y.txt")).toBeNull();
+  });
+
+  it("serves one archive at two mounts, each in its own way", async () => {
+    const fs = withTransparentArchives(nodeFileSystem(dir), [
+      { archive: "/tree.zip", serves: "/flat", entry: "basename" },
+      { archive: "/tree.zip", serves: "/tree" },
+    ]);
+    expect((await (await fs.directory("/tree"))!.entries()).map((e) => e.name).sort()).toEqual([
+      "Foo.png",
+      "Sub",
+    ]);
+    expect(await text(fs, "/flat/x/Foo.png")).toBe("archived");
+  });
+
+  it("lists a real and an archived name once when folding", async () => {
+    const fs = withTransparentArchives(
+      nodeFileSystem(dir),
+      [{ archive: "/tree.zip", serves: "/" }],
+      { caseInsensitive: true },
+    );
+    const names = (await (await fs.directory("/"))!.entries()).map((e) => e.name);
+    expect(names.filter((n) => n.toLowerCase() === "foo.png")).toEqual(["foo.png"]);
+  });
+
+  it("stats an entry without inflating it", async () => {
+    // Copied out of the Buffer, whose pooled backing store zip.js would see.
+    const zip = new Uint8Array(await readFile(join(dir, "tree.zip")));
+    let read = 0;
+    const counting: CsFileSystem = {
+      kind: "counting",
+      async file(path) {
+        if (path !== "/tree.zip") return null;
+        return new RangeFile(path, zip.byteLength, async (a, b) => {
+          read += b - a;
+          return zip.subarray(a, b);
+        });
+      },
+      async directory() {
+        return null;
+      },
+      async read() {
+        return null;
+      },
+      async stat() {
+        return null;
+      },
+    };
+    const fs = withTransparentArchives(counting, [{ archive: "/tree.zip", serves: "/" }]);
+    await fs.stat("/Sub/Y.txt");
+    const afterFirst = read;
+    await fs.stat("/Foo.png");
+    // The central directory is read once; a stat after that touches nothing.
+    expect(read).toBe(afterFirst);
+  });
+});
+
+describe("archives that fail to open", () => {
+  const flaky = (bytes: Uint8Array, failures: { left: number; error: () => Error }) => {
+    const fs: CsFileSystem = {
+      kind: "flaky",
+      async file(path): Promise<CsFile | null> {
+        if (path !== "/a.zip") return null;
+        return new RangeFile(path, bytes.byteLength, async (s, e) => {
+          if (failures.left > 0) {
+            failures.left -= 1;
+            throw failures.error();
+          }
+          return bytes.subarray(s, e);
+        });
+      },
+      async directory() {
+        return null;
+      },
+      async read() {
+        return null;
+      },
+      async stat() {
+        return null;
+      },
+    };
+    return fs;
+  };
+
+  it("tries again after a failure, rather than keeping it", async () => {
+    const zip = await makeZip([{ name: "x.txt", text: "ok" }]);
+    const failures = { left: 1, error: () => new BackendError("connection reset", "/a.zip") };
+    const fs = withArchives(flaky(zip, failures));
+    await expect(fs.file("/a.zip#/x.txt")).rejects.toThrow(/connection reset/);
+    expect(await fs.file("/a.zip#/x.txt").then((f) => f?.text())).toBe("ok");
+
+    failures.left = 1;
+    const mounted = withTransparentArchives(flaky(zip, failures), [
+      { archive: "/a.zip", serves: "/m" },
+    ]);
+    await expect(mounted.file("/m/x.txt")).rejects.toThrow(/connection reset/);
+    expect(await mounted.file("/m/x.txt").then((f) => f?.text())).toBe("ok");
+  });
+
+  it("passes a store's own error through with its type", async () => {
+    const zip = await makeZip([{ name: "x.txt", text: "ok" }]);
+    const failures = { left: 1, error: () => new NotDataError("http://h/a.zip", "text/html") };
+    const err = await withArchives(flaky(zip, failures))
+      .file("/a.zip#/x.txt")
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NotDataError);
   });
 });
 

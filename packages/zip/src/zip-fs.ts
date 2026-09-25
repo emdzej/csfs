@@ -60,14 +60,20 @@ function keyOf(name: string, caseInsensitive: boolean): string {
 
 export class ZipFileSystem implements CsFileSystem {
   readonly kind = "zip";
-  private tree?: Promise<Node>;
+  private tree: Promise<Node> | undefined;
 
   constructor(
     private readonly archive: CsFile,
     private readonly opts: ZipFileSystemOptions = {},
   ) {}
 
-  /** Read the central directory once and build the tree from it. */
+  /**
+   * Read the central directory once and build the tree from it.
+   *
+   * Once it has *succeeded*: a failed read is dropped, so a transient error
+   * fetching the directory does not make the archive unreadable for as long as
+   * this object lives.
+   */
   private load(): Promise<Node> {
     this.tree ??= (async () => {
       const reader = new ZipReader(new CsFileReader(this.archive), {
@@ -80,6 +86,10 @@ export class ZipFileSystem implements CsFileSystem {
       try {
         entries = await reader.getEntries();
       } catch (e) {
+        // A store's own errors pass through as they are. `NotDataError` and
+        // `RangeUnsupportedError` need opposite handling, and wrapping them as
+        // "not a readable zip" sent every caller down the corrupt-archive path.
+        if (e instanceof BackendError) throw e;
         throw new BackendError(
           `not a readable zip archive: ${e instanceof Error ? e.message : String(e)}`,
           this.archive.path,
@@ -120,7 +130,10 @@ export class ZipFileSystem implements CsFileSystem {
         }
       }
       return root;
-    })();
+    })().catch((e: unknown) => {
+      this.tree = undefined;
+      throw e;
+    });
     return this.tree;
   }
 
@@ -144,27 +157,33 @@ export class ZipFileSystem implements CsFileSystem {
     return node ? { node, path: `/${found.join("/")}` } : null;
   }
 
-  /** Read one entry's bytes. */
-  private async readEntry(entry: FileEntry, path: string): Promise<Uint8Array> {
-    const chunks: Uint8Array[] = [];
+  /**
+   * Read one entry's bytes.
+   *
+   * Straight into a buffer sized from the central directory. Collecting the
+   * chunks and concatenating them held every byte twice at the peak, which for
+   * a 100 MB entry is 200 MB. The size is trusted only as a starting point: an
+   * entry that inflates past it grows the buffer rather than being cut short.
+   */
+  private async readEntry(entry: FileEntry): Promise<Uint8Array> {
+    let out = new Uint8Array(entry.uncompressedSize);
+    let at = 0;
     const sink = new WritableStream<Uint8Array>({
       write(chunk) {
-        chunks.push(chunk);
+        if (at + chunk.byteLength > out.byteLength) {
+          const grown = new Uint8Array(Math.max(out.byteLength * 2, at + chunk.byteLength));
+          grown.set(out.subarray(0, at));
+          out = grown;
+        }
+        out.set(chunk, at);
+        at += chunk.byteLength;
       },
     });
     await entry.getData(sink, {
       ...(this.opts.password !== undefined ? { password: this.opts.password } : {}),
       useWebWorkers: false,
     });
-    let total = 0;
-    for (const c of chunks) total += c.byteLength;
-    const out = new Uint8Array(total);
-    let at = 0;
-    for (const c of chunks) {
-      out.set(c, at);
-      at += c.byteLength;
-    }
-    return out;
+    return at === out.byteLength ? out : out.slice(0, at);
   }
 
   async file(path: string): Promise<CsFile | null> {
@@ -174,7 +193,7 @@ export class ZipFileSystem implements CsFileSystem {
     // access, and a deflated entry has no seekable form — offering a lazy
     // slice would mean re-inflating from the start for every read, which is
     // slower and more surprising than doing it once.
-    const bytes = await this.readEntry(found.node.entry, found.path);
+    const bytes = await this.readEntry(found.node.entry);
     return bytesFile(found.path, bytes, mimeType(found.path));
   }
 
@@ -213,13 +232,6 @@ export class ZipFileSystem implements CsFileSystem {
     };
     visit(await this.load(), "");
     return out;
-  }
-
-  /** @internal — `ZipDirectory` reaches back for this. */
-  async entryFile(node: Node, path: string): Promise<CsFile | null> {
-    if (!node.entry) return null;
-    const bytes = await this.readEntry(node.entry, path);
-    return bytesFile(path, bytes, mimeType(path));
   }
 }
 
