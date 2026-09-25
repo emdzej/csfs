@@ -28,13 +28,13 @@ jobs:
         # ever ran there would be promising 22 on faith.
         node: [22, 24]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # No `version:` — `packageManager` in package.json is the one source of
       # the pnpm version, and setting both makes the action error on the clash.
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node }}
           cache: pnpm

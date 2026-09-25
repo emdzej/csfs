@@ -51,6 +51,6 @@
     "@emdzej/csfs-fsa": "workspace:*"
   },
   "devDependencies": {
-    "@types/node": "^22.13.1"
+    "@types/node": "^22.20.4"
   }
 }

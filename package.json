@@ -2,7 +2,7 @@
   "name": "csfs",
   "private": true,
   "version": "0.2.0",
-  "description": "Client-side file system \u2014 one read API over HTTP, a picked directory, OPFS, and inside zip archives",
+  "description": "Client-side file system — one read API over HTTP, a picked directory, OPFS, and inside zip archives",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -22,9 +22,9 @@
     "clean": "turbo run clean"
   },
   "devDependencies": {
-    "@types/node": "^22.13.1",
-    "prettier": "^3.5.1",
-    "turbo": "^2.4.2",
+    "@types/node": "^22.20.4",
+    "prettier": "^3.9.9",
+    "turbo": "^2.11.4",
     "typescript": "^5.7.3",
     "vitest": "^2.1.9"
   },

@@ -46,9 +46,9 @@
     "@emdzej/csfs-zip": "workspace:*",
     "chalk": "^6.0.0",
     "commander": "^15.0.0",
-    "ignore": "^7.0.9"
+    "ignore": "^7.0.10"
   },
   "devDependencies": {
-    "@types/node": "^22.13.1"
+    "@types/node": "^22.20.4"
   }
 }
